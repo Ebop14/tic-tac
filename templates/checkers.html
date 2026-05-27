@@ -1,0 +1,1024 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>checkers — vs transformer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Fraunces:ital,opsz,wght@0,9..144,100..900;1,9..144,100..900&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+
+  :root {
+    --cream: #f5f0e8;
+    --ink: #1a1a18;
+    --rust: #c4451a;
+    --indigo: #2b3a67;
+    --stone: #a8a08e;
+    --dark-sq: #b8a88a;
+    --light-sq: #e8e0d0;
+    --cell-size: min(22vw, 110px);
+  }
+
+  html { font-size: 16px }
+
+  body {
+    background: var(--cream);
+    color: var(--ink);
+    font-family: 'DM Mono', monospace;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(26,26,24,0.015) 2px, rgba(26,26,24,0.015) 4px);
+    pointer-events: none;
+    z-index: 100;
+  }
+
+  .container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.8rem;
+    padding: 2rem;
+  }
+
+  .game-nav {
+    display: flex;
+    gap: 0.6rem;
+    align-items: baseline;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .game-nav a {
+    color: var(--stone);
+    text-decoration: none;
+    padding: 0.3rem 0.6rem;
+    border-radius: 3px;
+    transition: all 0.2s ease;
+  }
+
+  .game-nav a:hover { color: var(--ink) }
+  .game-nav a.active { color: var(--ink); font-weight: 500; background: rgba(26,26,24,0.06) }
+  .game-nav .sep { color: var(--stone); opacity: 0.3 }
+
+  header { text-align: center }
+
+  h1 {
+    font-family: 'Fraunces', serif;
+    font-weight: 900;
+    font-size: clamp(2.2rem, 6vw, 3.5rem);
+    letter-spacing: -0.03em;
+    line-height: 1;
+    color: var(--ink);
+    font-style: italic;
+  }
+
+  h1 span {
+    font-weight: 300;
+    font-style: normal;
+    color: var(--stone);
+    font-size: 0.5em;
+    display: block;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    font-family: 'DM Mono', monospace;
+    margin-top: 0.3rem;
+  }
+
+  .game-area {
+    display: flex;
+    align-items: flex-start;
+    gap: 2.5rem;
+  }
+
+  .board {
+    display: grid;
+    grid-template-columns: repeat(4, var(--cell-size));
+    grid-template-rows: repeat(4, var(--cell-size));
+    border: 3px solid var(--ink);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .cell {
+    width: var(--cell-size);
+    height: var(--cell-size);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    transition: box-shadow 0.15s ease;
+  }
+
+  .cell.dark { background: var(--dark-sq) }
+  .cell.light { background: var(--light-sq) }
+  .cell.dark.playable { cursor: pointer }
+
+  .cell.selected {
+    box-shadow: inset 0 0 0 3px var(--rust);
+  }
+
+  .cell.legal-dest::after {
+    content: '';
+    width: 28%;
+    height: 28%;
+    background: rgba(26,26,24,0.25);
+    border-radius: 50%;
+    position: absolute;
+    z-index: 3;
+    pointer-events: none;
+  }
+
+  .cell.legal-dest.has-piece::after {
+    width: 90%;
+    height: 90%;
+    background: transparent;
+    border: 3px solid rgba(26,26,24,0.3);
+    border-radius: 50%;
+  }
+
+  .cell.legal-dest:hover {
+    box-shadow: inset 0 0 0 3px rgba(196,69,26,0.4);
+  }
+
+  .cell.last-move-from, .cell.last-move-to {
+    box-shadow: inset 0 0 0 3px rgba(43,58,103,0.35);
+  }
+
+  .cell.preview-from {
+    box-shadow: inset 0 0 0 3px rgba(43,58,103,0.25);
+  }
+
+  .cell.preview-to {
+    box-shadow: inset 0 0 0 3px rgba(43,58,103,0.4);
+  }
+
+  .cell .prob-overlay {
+    position: absolute;
+    inset: 3px;
+    z-index: 1;
+    border-radius: 4px;
+    transition: background 0.25s ease, opacity 0.25s ease;
+    opacity: 0;
+  }
+
+  .cell .prob-overlay.visible { opacity: 1 }
+
+  .cell .prob-label {
+    position: absolute;
+    bottom: 5px; right: 6px;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.55rem;
+    font-weight: 500;
+    z-index: 5;
+    color: var(--indigo);
+    opacity: 0;
+    transition: opacity 0.25s ease;
+  }
+
+  .cell .prob-label.visible { opacity: 0.85 }
+
+  .cell .response-marker {
+    position: absolute;
+    top: 4px; left: 5px;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.45rem;
+    font-weight: 500;
+    color: var(--indigo);
+    z-index: 5;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .cell.chosen-dest {
+    box-shadow: inset 0 0 0 3px var(--indigo);
+    animation: chosen-pulse 2s ease-in-out infinite;
+  }
+
+  .cell.chosen-origin {
+    box-shadow: inset 0 0 0 2px rgba(43,58,103,0.3);
+  }
+
+  @keyframes chosen-pulse {
+    0%, 100% { box-shadow: inset 0 0 0 3px var(--indigo) }
+    50% { box-shadow: inset 0 0 0 3px rgba(43,58,103,0.4), 0 0 12px rgba(43,58,103,0.2) }
+  }
+
+  .piece {
+    width: 72%;
+    height: 72%;
+    border-radius: 50%;
+    position: absolute;
+    z-index: 2;
+    transition: transform 0.1s ease, opacity 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .piece.black-man, .piece.black-king {
+    background: radial-gradient(circle at 35% 35%, #4a3528, #1a1a18);
+    box-shadow: 0 3px 8px rgba(0,0,0,0.35), inset 0 1px 2px rgba(255,255,255,0.1);
+  }
+
+  .piece.white-man, .piece.white-king {
+    background: radial-gradient(circle at 35% 35%, #f0e8d8, #d4c8b0);
+    box-shadow: 0 3px 8px rgba(0,0,0,0.2), inset 0 1px 2px rgba(255,255,255,0.4);
+    border: 2px solid #a89880;
+  }
+
+  .piece.king::after {
+    content: 'K';
+    font-family: 'Fraunces', serif;
+    font-weight: 900;
+    font-size: calc(var(--cell-size) * 0.28);
+    line-height: 1;
+  }
+
+  .piece.black-king::after { color: rgba(255,255,255,0.7) }
+  .piece.white-king::after { color: rgba(100,80,60,0.6) }
+
+  .piece.ghost {
+    opacity: 0.3;
+    z-index: 2;
+  }
+
+  .piece.preview-captured {
+    opacity: 0.2;
+  }
+
+  .piece.captured {
+    animation: fade-out 0.3s ease forwards;
+  }
+
+  @keyframes fade-out {
+    to { opacity: 0; transform: scale(0.5) }
+  }
+
+  .piece.placed {
+    animation: pop-in 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  }
+
+  @keyframes pop-in {
+    from { transform: scale(0.6); opacity: 0.5 }
+    to { transform: scale(1); opacity: 1 }
+  }
+
+  /* --- model output panel --- */
+  .model-panel {
+    width: 240px;
+    flex-shrink: 0;
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid rgba(26,26,24,0.1);
+  }
+
+  .panel-title {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.65rem;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--stone);
+  }
+
+  .panel-mode {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.55rem;
+    color: var(--rust);
+    letter-spacing: 0.05em;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+  }
+
+  .panel-mode.visible { opacity: 1 }
+
+  .move-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  .move-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+
+  .move-row {
+    display: grid;
+    grid-template-columns: 3.5em 1fr 3.5em;
+    gap: 0.5rem;
+    align-items: center;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.7rem;
+  }
+
+  .move-label {
+    color: var(--ink);
+    font-weight: 400;
+    letter-spacing: 0.03em;
+  }
+
+  .move-item.chosen .move-label { color: var(--indigo); font-weight: 500 }
+
+  .bar-container {
+    height: 14px;
+    background: rgba(26,26,24,0.04);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .bar {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.3s cubic-bezier(0.4,0,0.2,1);
+  }
+
+  .bar.chosen { background: var(--indigo) }
+  .bar.other { background: rgba(43,58,103,0.25) }
+
+  .prob-val {
+    text-align: right;
+    font-size: 0.6rem;
+    color: var(--ink);
+    font-weight: 400;
+  }
+
+  .move-item.chosen .prob-val { color: var(--indigo); font-weight: 500 }
+
+  .move-fen {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.5rem;
+    color: var(--stone);
+    letter-spacing: 0.02em;
+    padding-left: 0.2rem;
+    margin-bottom: 0.2rem;
+  }
+
+  .move-item.chosen .move-fen { color: rgba(43,58,103,0.6) }
+
+  .panel-section { margin-top: 1rem }
+
+  .raw-logits {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.55rem;
+    color: var(--stone);
+    line-height: 1.7;
+  }
+
+  .raw-logits .logit-val { color: var(--ink); font-weight: 400 }
+  .raw-logits .logit-val.chosen-logit { color: var(--indigo); font-weight: 500 }
+
+  .panel-empty {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--stone);
+    font-style: italic;
+    opacity: 0.5;
+  }
+
+  .terminal-note {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.6rem;
+    color: var(--stone);
+    margin-top: 0.5rem;
+  }
+
+  .terminal-note .rust { color: var(--rust) }
+
+  /* --- status / controls --- */
+  .status-bar {
+    text-align: center;
+    min-height: 2.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .status-text {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.85rem;
+    font-weight: 400;
+    letter-spacing: 0.05em;
+    color: var(--stone);
+    text-transform: uppercase;
+  }
+
+  .status-text.highlight { color: var(--ink); font-weight: 500 }
+  .status-text .rust { color: var(--rust) }
+  .status-text .indigo { color: var(--indigo) }
+
+  .thinking {
+    display: inline-flex;
+    gap: 4px;
+    align-items: center;
+    margin-left: 0.4rem;
+  }
+
+  .thinking span {
+    width: 5px; height: 5px;
+    background: var(--indigo);
+    border-radius: 50%;
+    animation: pulse 1s ease-in-out infinite;
+  }
+
+  .thinking span:nth-child(2) { animation-delay: 0.15s }
+  .thinking span:nth-child(3) { animation-delay: 0.3s }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 0.2; transform: scale(0.8) }
+    50% { opacity: 1; transform: scale(1.2) }
+  }
+
+  .btn {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.8rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 0.6rem 1.6rem;
+    border: 2px solid var(--ink);
+    background: transparent;
+    color: var(--ink);
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .btn:hover { background: var(--ink); color: var(--cream) }
+  .btn:active { transform: scale(0.97) }
+
+  .score-bar {
+    display: flex;
+    gap: 2rem;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--stone);
+  }
+
+  .score-bar .val {
+    font-family: 'Fraunces', serif;
+    font-weight: 700;
+    font-size: 1.4rem;
+    color: var(--ink);
+    display: block;
+    line-height: 1;
+    margin-top: 0.2rem;
+  }
+
+  .score-bar .label-you .val { color: var(--rust) }
+  .score-bar .label-ai .val { color: var(--indigo) }
+
+  footer {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--stone);
+    letter-spacing: 0.05em;
+    margin-top: 0.5rem;
+  }
+
+  @media (max-width: 700px) {
+    .game-area { flex-direction: column; align-items: center; gap: 1.5rem }
+    .model-panel { width: calc(var(--cell-size) * 4) }
+  }
+
+  @media (max-width: 480px) {
+    .container { gap: 1.2rem; padding: 1.5rem }
+    .score-bar { gap: 1.2rem }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <nav class="game-nav">
+    <a href="/">tic-tac</a>
+    <span class="sep">/</span>
+    <a href="/checkers" class="active">checkers</a>
+  </nav>
+
+  <header>
+    <h1>Checkers<span>vs. transformer</span></h1>
+  </header>
+
+  <div class="score-bar">
+    <div class="label-you">you<span class="val" id="score-you">0</span></div>
+    <div class="label-draw">draw<span class="val" id="score-draw">0</span></div>
+    <div class="label-ai">model<span class="val" id="score-ai">0</span></div>
+  </div>
+
+  <div class="game-area">
+    <div class="board" id="board"></div>
+
+    <div class="model-panel">
+      <div class="panel-header">
+        <div class="panel-title">Model Output</div>
+        <div class="panel-mode" id="panel-mode">what-if</div>
+      </div>
+      <div id="panel-content">
+        <div class="panel-empty">waiting for move...</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <div class="status-text" id="status">Select a piece to move</div>
+  </div>
+
+  <button class="btn" id="reset-btn">New Game</button>
+  <footer>4x4 &middot; 2-layer transformer &middot; 64d &middot; trained on minimax</footer>
+</div>
+
+<script>
+const C_EMPTY = 0, BLACK_MAN = 1, WHITE_MAN = 2, BLACK_KING = 3, WHITE_KING = 4;
+const C_BLACK = 1, C_WHITE = 2;
+
+const SQ_TO_RC = {1:[0,1],2:[0,3],3:[1,0],4:[1,2],5:[2,1],6:[2,3],7:[3,0],8:[3,2]};
+const RC_TO_SQ = {};
+for (const [sq, [r,c]] of Object.entries(SQ_TO_RC)) RC_TO_SQ[r+','+c] = parseInt(sq);
+
+function pieceOwner(p) {
+  if (p === BLACK_MAN || p === BLACK_KING) return C_BLACK;
+  if (p === WHITE_MAN || p === WHITE_KING) return C_WHITE;
+  return 0;
+}
+
+function pieceClass(p) {
+  const map = {
+    [BLACK_MAN]: 'piece black-man',
+    [WHITE_MAN]: 'piece white-man',
+    [BLACK_KING]: 'piece black-king king',
+    [WHITE_KING]: 'piece white-king king',
+  };
+  return map[p] || '';
+}
+
+const INITIAL_FEN = 'B:W7,8:B1,2';
+
+const state = {
+  fen: INITIAL_FEN,
+  squares: [C_EMPTY, BLACK_MAN, BLACK_MAN, C_EMPTY, C_EMPTY, C_EMPTY, C_EMPTY, WHITE_MAN, WHITE_MAN],
+  currentPlayer: C_BLACK,
+  selected: null,
+  legalMoves: [],
+  gameOver: false,
+  result: null,
+  thinking: false,
+  scores: { you: 0, draw: 0, ai: 0 },
+  lastModelMove: null,
+  lastMoveProbs: null,
+};
+
+let previewCache = {};
+let activePreview = null;
+
+const boardEl = document.getElementById('board');
+const statusEl = document.getElementById('status');
+const panelContent = document.getElementById('panel-content');
+const panelMode = document.getElementById('panel-mode');
+const resetBtn = document.getElementById('reset-btn');
+
+function destsForPiece(sq) {
+  return state.legalMoves.filter(m => m.origin === sq).map(m => m.dest);
+}
+
+function buildPanelHtml(moveProbs, chosenMove, opts) {
+  const isPreview = opts.isPreview || false;
+  const terminal = opts.terminal || false;
+  const terminalResult = opts.terminalResult;
+  const maxProb = moveProbs.length ? Math.max(...moveProbs.map(m => m.prob)) : 1;
+
+  let html = '<div class="move-list">';
+  for (const m of moveProbs) {
+    const isChosen = chosenMove && m.origin === chosenMove.origin && m.dest === chosenMove.dest;
+    const cls = isChosen ? 'chosen' : '';
+    const barCls = isChosen ? 'chosen' : 'other';
+    const pct = maxProb > 0 ? (m.prob / maxProb * 100) : 0;
+    html += `<div class="move-item ${cls}">
+      <div class="move-row">
+        <div class="move-label">${m.pdn}</div>
+        <div class="bar-container"><div class="bar ${barCls}" style="width:${pct}%"></div></div>
+        <div class="prob-val">${(m.prob * 100).toFixed(1)}%</div>
+      </div>`;
+    if (m.fen) {
+      html += `<div class="move-fen">${m.fen}</div>`;
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+
+  if (moveProbs.length > 0) {
+    html += '<div class="panel-section"><div class="raw-logits"><b>raw logits</b><br>';
+    for (const m of moveProbs) {
+      const isChosen = chosenMove && m.origin === chosenMove.origin && m.dest === chosenMove.dest;
+      const cls = isChosen ? 'chosen-logit' : '';
+      const display = m.logit === null ? '-inf' : m.logit.toFixed(2);
+      html += `<span class="logit-val ${cls}">${m.pdn}&nbsp;${display}</span>&ensp;`;
+    }
+    html += '</div></div>';
+  }
+
+  if (terminal) {
+    const msg = terminalResult === -1
+      ? '<span class="rust">you win — no model response</span>'
+      : terminalResult === 0
+        ? 'draw — no model response'
+        : '<span class="indigo">model wins</span>';
+    html += `<div class="terminal-note">${msg}</div>`;
+  }
+
+  return html;
+}
+
+function showPanel(moveProbs, chosenMove, opts) {
+  panelContent.innerHTML = buildPanelHtml(moveProbs, chosenMove, opts);
+  panelMode.classList.toggle('visible', !!opts.isPreview);
+}
+
+function applyBoardOverlays(moveProbs, chosenMove, opts) {
+  clearBoardOverlays();
+  if (!moveProbs || moveProbs.length === 0) return;
+
+  const destProbs = {};
+  for (const m of moveProbs) {
+    if (!destProbs[m.dest] || m.prob > destProbs[m.dest].prob) {
+      destProbs[m.dest] = m;
+    }
+  }
+  const maxProb = Math.max(...moveProbs.map(m => m.prob), 0.001);
+
+  const cells = boardEl.querySelectorAll('.cell[data-sq]');
+  cells.forEach(cell => {
+    const sq = parseInt(cell.dataset.sq);
+    const overlay = cell.querySelector('.prob-overlay');
+    const label = cell.querySelector('.prob-label');
+    if (!overlay || !label) return;
+
+    const moveData = destProbs[sq];
+    if (moveData) {
+      const intensity = moveData.prob / maxProb;
+      const isChosen = chosenMove && sq === chosenMove.dest;
+      overlay.style.background = `rgba(43,58,103,${intensity * 0.25})`;
+      overlay.classList.add('visible');
+      if (moveData.prob > 0.005) {
+        label.textContent = (moveData.prob * 100).toFixed(1) + '%';
+        label.classList.add('visible');
+      }
+      if (isChosen) {
+        cell.classList.add('chosen-dest');
+        const marker = document.createElement('div');
+        marker.className = 'response-marker';
+        marker.textContent = opts?.isPreview ? 'would reply' : 'reply';
+        cell.appendChild(marker);
+      }
+    }
+
+    if (chosenMove && sq === chosenMove.origin) {
+      cell.classList.add('chosen-origin');
+    }
+  });
+}
+
+function clearBoardOverlays() {
+  boardEl.querySelectorAll('.prob-overlay').forEach(el => {
+    el.style.background = 'transparent';
+    el.classList.remove('visible');
+  });
+  boardEl.querySelectorAll('.prob-label').forEach(el => {
+    el.textContent = '';
+    el.classList.remove('visible');
+  });
+  boardEl.querySelectorAll('.response-marker').forEach(el => el.remove());
+  boardEl.querySelectorAll('.chosen-dest, .chosen-origin').forEach(el => {
+    el.classList.remove('chosen-dest', 'chosen-origin');
+  });
+}
+
+function showLastModelOutput() {
+  if (state.lastMoveProbs) {
+    showPanel(state.lastMoveProbs, state.lastModelMove, { isPreview: false });
+    applyBoardOverlays(state.lastMoveProbs, state.lastModelMove, { isPreview: false });
+  } else {
+    panelContent.innerHTML = '<div class="panel-empty">waiting for move...</div>';
+    panelMode.classList.remove('visible');
+    clearBoardOverlays();
+  }
+}
+
+function renderBoard() {
+  boardEl.innerHTML = '';
+  for (let displayRow = 0; displayRow < 4; displayRow++) {
+    const boardRow = 3 - displayRow;
+    for (let col = 0; col < 4; col++) {
+      const cell = document.createElement('div');
+      const isDark = (boardRow + col) % 2 === 1;
+      cell.className = 'cell ' + (isDark ? 'dark' : 'light');
+
+      const sqKey = boardRow + ',' + col;
+      const sq = RC_TO_SQ[sqKey];
+
+      if (isDark && sq) {
+        cell.classList.add('playable');
+        cell.dataset.sq = sq;
+
+        const overlay = document.createElement('div');
+        overlay.className = 'prob-overlay';
+        cell.appendChild(overlay);
+
+        const piece = state.squares[sq];
+
+        if (piece !== C_EMPTY) {
+          const el = document.createElement('div');
+          el.className = pieceClass(piece);
+          cell.appendChild(el);
+        }
+
+        const probLabel = document.createElement('div');
+        probLabel.className = 'prob-label';
+        cell.appendChild(probLabel);
+
+        if (state.selected === sq) {
+          cell.classList.add('selected');
+        }
+
+        if (state.selected !== null) {
+          const dests = destsForPiece(state.selected);
+          if (dests.includes(sq)) {
+            cell.classList.add('legal-dest');
+            if (piece !== C_EMPTY) cell.classList.add('has-piece');
+          }
+        }
+
+        if (!state.gameOver && !state.thinking) {
+          cell.addEventListener('click', () => handleClick(sq));
+          if (state.selected !== null) {
+            const dests = destsForPiece(state.selected);
+            if (dests.includes(sq)) {
+              cell.addEventListener('mouseenter', () => handleDestHover(sq));
+              cell.addEventListener('mouseleave', handleDestHoverEnd);
+            }
+          }
+        }
+      }
+
+      boardEl.appendChild(cell);
+    }
+  }
+}
+
+function clearPreviewOverlay() {
+  boardEl.querySelectorAll('.preview-from, .preview-to').forEach(c => {
+    c.classList.remove('preview-from', 'preview-to');
+  });
+  boardEl.querySelectorAll('.piece.ghost').forEach(el => el.remove());
+  boardEl.querySelectorAll('.piece.preview-captured').forEach(el => el.classList.remove('preview-captured'));
+}
+
+function renderStatus() {
+  if (state.thinking) {
+    statusEl.innerHTML = 'Model thinking<span class="thinking"><span></span><span></span><span></span></span>';
+  } else if (state.gameOver) {
+    if (state.result === 1) {
+      statusEl.innerHTML = '<span class="highlight"><span class="indigo">Model wins</span></span>';
+    } else if (state.result === -1) {
+      statusEl.innerHTML = '<span class="highlight"><span class="rust">You win!</span></span>';
+    } else {
+      statusEl.innerHTML = '<span class="highlight">Draw</span>';
+    }
+  } else if (state.selected !== null) {
+    statusEl.textContent = 'Select destination — hover to preview';
+  } else {
+    statusEl.textContent = 'Select a piece to move';
+  }
+}
+
+function renderScores() {
+  document.getElementById('score-you').textContent = state.scores.you;
+  document.getElementById('score-draw').textContent = state.scores.draw;
+  document.getElementById('score-ai').textContent = state.scores.ai;
+}
+
+function render() {
+  renderBoard();
+  renderStatus();
+  showLastModelOutput();
+  renderScores();
+}
+
+// --- Preview (hover) ---
+
+function previewKey(origin, dest) {
+  return state.fen + ':' + origin + ':' + dest;
+}
+
+async function fetchPreview(origin, dest) {
+  const key = previewKey(origin, dest);
+  if (previewCache[key]) return previewCache[key];
+
+  const resp = await fetch('/checkers/api/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fen: state.fen, origin, dest }),
+  });
+  const data = await resp.json();
+  previewCache[key] = data;
+  return data;
+}
+
+async function handleDestHover(destSq) {
+  if (state.selected === null || state.gameOver || state.thinking) return;
+  const origin = state.selected;
+  activePreview = { origin, dest: destSq };
+
+  try {
+    const data = await fetchPreview(origin, destSq);
+    if (!activePreview || activePreview.origin !== origin || activePreview.dest !== destSq) return;
+
+    clearPreviewOverlay();
+
+    // Ghost piece at destination
+    const destCell = boardEl.querySelector(`.cell[data-sq="${destSq}"]`);
+    if (destCell) {
+      const ghost = document.createElement('div');
+      ghost.className = pieceClass(state.squares[origin]) + ' ghost';
+      destCell.appendChild(ghost);
+    }
+
+    // Fade captured pieces
+    if (data.captured) {
+      for (const capSq of data.captured) {
+        const capCell = boardEl.querySelector(`.cell[data-sq="${capSq}"]`);
+        if (capCell) {
+          const capPiece = capCell.querySelector('.piece:not(.ghost)');
+          if (capPiece) capPiece.classList.add('preview-captured');
+        }
+      }
+    }
+
+    if (data.isTerminal) {
+      showPanel([], null, { isPreview: true, terminal: true, terminalResult: data.result });
+      clearBoardOverlays();
+    } else if (data.modelResponse) {
+      const chosen = { origin: data.modelResponse.origin, dest: data.modelResponse.dest };
+      showPanel(data.modelResponse.moveProbs, chosen, { isPreview: true });
+      clearBoardOverlays();
+      applyBoardOverlays(data.modelResponse.moveProbs, chosen, { isPreview: true });
+    }
+  } catch (e) {
+    console.error('Preview failed:', e);
+  }
+}
+
+function handleDestHoverEnd() {
+  activePreview = null;
+  clearPreviewOverlay();
+  showLastModelOutput();
+}
+
+// --- Interaction ---
+
+function handleClick(sq) {
+  if (state.gameOver || state.thinking) return;
+
+  if (state.selected === sq) {
+    state.selected = null;
+    activePreview = null;
+    render();
+    return;
+  }
+
+  if (state.selected !== null) {
+    const dests = destsForPiece(state.selected);
+    if (dests.includes(sq)) {
+      activePreview = null;
+      makeMove(state.selected, sq);
+      return;
+    }
+  }
+
+  const piece = state.squares[sq];
+  if (pieceOwner(piece) === C_BLACK) {
+    const hasMoves = state.legalMoves.some(m => m.origin === sq);
+    if (hasMoves) {
+      state.selected = sq;
+      activePreview = null;
+      render();
+    }
+  } else {
+    state.selected = null;
+    activePreview = null;
+    render();
+  }
+}
+
+async function makeMove(origin, dest) {
+  state.selected = null;
+  state.thinking = true;
+  state.lastModelMove = null;
+  state.lastMoveProbs = null;
+  render();
+
+  try {
+    const resp = await fetch('/checkers/api/move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fen: state.fen, origin, dest }),
+    });
+    const data = await resp.json();
+
+    if (data.error) {
+      state.thinking = false;
+      statusEl.textContent = 'Invalid move — try again';
+      render();
+      return;
+    }
+
+    await new Promise(r => setTimeout(r, 350));
+
+    state.fen = data.fen;
+    state.squares = data.squares;
+    state.legalMoves = data.legalMoves || [];
+    state.thinking = false;
+    previewCache = {};
+
+    if (data.modelResponse) {
+      state.lastModelMove = { origin: data.modelResponse.origin, dest: data.modelResponse.dest };
+      state.lastMoveProbs = data.modelResponse.moveProbs;
+    }
+
+    if (data.isTerminal) {
+      state.gameOver = true;
+      state.result = data.result;
+      if (data.result === 1) state.scores.ai++;
+      else if (data.result === -1) state.scores.you++;
+      else state.scores.draw++;
+    }
+
+  } catch (e) {
+    state.thinking = false;
+    statusEl.textContent = 'Error — try again';
+    console.error(e);
+  }
+
+  render();
+}
+
+async function fetchInitialState() {
+  try {
+    const resp = await fetch('/checkers/api/state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fen: state.fen }),
+    });
+    const data = await resp.json();
+    state.squares = data.squares;
+    state.currentPlayer = data.currentPlayer;
+    state.legalMoves = data.legalMoves || [];
+  } catch (e) {
+    console.error('Failed to fetch initial state:', e);
+  }
+  render();
+}
+
+function resetGame() {
+  state.fen = INITIAL_FEN;
+  state.squares = [C_EMPTY, BLACK_MAN, BLACK_MAN, C_EMPTY, C_EMPTY, C_EMPTY, C_EMPTY, WHITE_MAN, WHITE_MAN];
+  state.currentPlayer = C_BLACK;
+  state.selected = null;
+  state.legalMoves = [];
+  state.gameOver = false;
+  state.result = null;
+  state.thinking = false;
+  state.lastModelMove = null;
+  state.lastMoveProbs = null;
+  previewCache = {};
+  activePreview = null;
+  fetchInitialState();
+}
+
+resetBtn.addEventListener('click', resetGame);
+fetchInitialState();
+</script>
+</body>
+</html>

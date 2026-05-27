@@ -52,6 +52,28 @@
     padding: 2rem;
   }
 
+  .game-nav {
+    display: flex;
+    gap: 0.6rem;
+    align-items: baseline;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .game-nav a {
+    color: var(--stone);
+    text-decoration: none;
+    padding: 0.3rem 0.6rem;
+    border-radius: 3px;
+    transition: all 0.2s ease;
+  }
+
+  .game-nav a:hover { color: var(--ink) }
+  .game-nav a.active { color: var(--ink); font-weight: 500; background: rgba(26,26,24,0.06) }
+  .game-nav .sep { color: var(--stone); opacity: 0.3 }
+
   header { text-align: center }
 
   h1 {
@@ -153,7 +175,17 @@
     letter-spacing: 0;
   }
 
-  .cell .prob-label.visible { opacity: 0.8 }
+  .cell .prob-label.visible { opacity: 0.85 }
+
+  .cell.chosen-cell {
+    box-shadow: inset 0 0 0 3px var(--indigo);
+    animation: chosen-pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes chosen-pulse {
+    0%, 100% { box-shadow: inset 0 0 0 3px var(--indigo) }
+    50% { box-shadow: inset 0 0 0 3px rgba(43,58,103,0.4), 0 0 12px rgba(43,58,103,0.15) }
+  }
 
   .cell .ghost-piece {
     opacity: 0.2;
@@ -426,6 +458,12 @@
 <body>
 
 <div class="container">
+  <nav class="game-nav">
+    <a href="/" class="active">tic-tac</a>
+    <span class="sep">/</span>
+    <a href="/checkers">checkers</a>
+  </nav>
+
   <header>
     <h1>Tic-Tac<span>vs. transformer</span></h1>
   </header>
@@ -563,6 +601,7 @@ function displayData(probs, logits, chosen, legalMask, opts) {
 
     if (ghost) ghost.remove();
     if (respMarker) respMarker.remove();
+    cell.classList.remove('chosen-cell');
 
     if (!overlay || !probLbl) return;
 
@@ -584,18 +623,20 @@ function displayData(probs, logits, chosen, legalMask, opts) {
       const legalProbs = probs.filter((_, j) => legalMask[j]);
       const maxP = Math.max(...legalProbs);
       const intensity = probs[i] / maxP;
-      overlay.style.background = `rgba(43,58,103,${intensity * 0.18})`;
+      const isChosen = i === chosen;
+      overlay.style.background = `rgba(43,58,103,${intensity * 0.25})`;
       overlay.classList.add('visible');
-      if (probs[i] > 0.01) {
+      if (probs[i] > 0.005) {
         probLbl.textContent = (probs[i] * 100).toFixed(1) + '%';
         probLbl.classList.add('visible');
       } else {
         probLbl.classList.remove('visible');
       }
-      if (opts.isPreview && i === chosen) {
+      if (isChosen) {
+        cell.classList.add('chosen-cell');
         const m = document.createElement('div');
         m.className = 'response-marker visible';
-        m.textContent = 'reply';
+        m.textContent = opts.isPreview ? 'would reply' : 'reply';
         cell.appendChild(m);
       }
     } else {
@@ -617,6 +658,7 @@ function clearOverlays() {
     if (probLbl) { probLbl.classList.remove('visible') }
     if (ghost) ghost.remove();
     if (respMarker) respMarker.remove();
+    cell.classList.remove('chosen-cell');
   });
   panelMode.classList.remove('visible');
 }
