@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tic-tac — vs transformer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Fraunces:ital,opsz,wght@0,9..144,100..900;1,9..144,100..900&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+
+  :root {
+    --cream: #f5f0e8;
+    --ink: #1a1a18;
+    --rust: #c4451a;
+    --indigo: #2b3a67;
+    --stone: #a8a08e;
+    --line: #1a1a18;
+    --cell-size: min(28vw, 140px);
+    --line-w: 4px;
+  }
+
+  html { font-size: 16px }
+
+  body {
+    background: var(--cream);
+    color: var(--ink);
+    font-family: 'DM Mono', monospace;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(26,26,24,0.015) 2px, rgba(26,26,24,0.015) 4px);
+    pointer-events: none;
+    z-index: 100;
+  }
+
+  .container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2rem;
+    padding: 2rem;
+  }
+
+  header { text-align: center }
+
+  h1 {
+    font-family: 'Fraunces', serif;
+    font-weight: 900;
+    font-size: clamp(2.5rem, 7vw, 4rem);
+    letter-spacing: -0.03em;
+    line-height: 1;
+    color: var(--ink);
+    font-style: italic;
+  }
+
+  h1 span {
+    font-weight: 300;
+    font-style: normal;
+    color: var(--stone);
+    font-size: 0.5em;
+    display: block;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    font-family: 'DM Mono', monospace;
+    margin-top: 0.3rem;
+  }
+
+  .game-area {
+    display: flex;
+    align-items: flex-start;
+    gap: 2.5rem;
+  }
+
+  .board {
+    display: grid;
+    grid-template-columns: repeat(3, var(--cell-size));
+    grid-template-rows: repeat(3, var(--cell-size));
+    position: relative;
+  }
+
+  .cell {
+    width: var(--cell-size);
+    height: var(--cell-size);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    position: relative;
+    transition: background 0.15s ease;
+  }
+
+  .cell:hover:not(.taken):not(.game-over) {
+    background: rgba(26,26,24,0.04);
+  }
+
+  .cell::after, .cell::before {
+    content: '';
+    position: absolute;
+    background: var(--line);
+  }
+
+  .cell:nth-child(3n+1)::after, .cell:nth-child(3n+2)::after {
+    right: calc(var(--line-w) / -2);
+    top: 8%; height: 84%; width: var(--line-w); border-radius: 2px;
+  }
+
+  .cell:nth-child(-n+6)::before {
+    bottom: calc(var(--line-w) / -2);
+    left: 8%; width: 84%; height: var(--line-w); border-radius: 2px;
+  }
+
+  .cell:nth-child(3n)::after { display: none }
+  .cell:nth-child(n+7)::before { display: none }
+
+  .cell svg {
+    width: 55%; height: 55%;
+    position: absolute;
+    z-index: 2;
+  }
+
+  .cell .prob-overlay {
+    position: absolute;
+    inset: 4px;
+    z-index: 1;
+    border-radius: 4px;
+    transition: background 0.25s ease, opacity 0.25s ease;
+    opacity: 0;
+  }
+
+  .cell .prob-overlay.visible { opacity: 1 }
+
+  .cell .prob-label {
+    position: absolute;
+    bottom: 6px; right: 8px;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.55rem;
+    font-weight: 500;
+    z-index: 3;
+    color: var(--indigo);
+    opacity: 0;
+    transition: opacity 0.25s ease;
+    letter-spacing: 0;
+  }
+
+  .cell .prob-label.visible { opacity: 0.8 }
+
+  .cell .ghost-piece {
+    opacity: 0.2;
+    z-index: 2;
+  }
+
+  .cell .response-marker {
+    position: absolute;
+    top: 5px; left: 7px;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.5rem;
+    font-weight: 500;
+    color: var(--indigo);
+    z-index: 4;
+    opacity: 0;
+    transition: opacity 0.25s ease;
+    letter-spacing: 0.03em;
+  }
+
+  .cell .response-marker.visible { opacity: 0.7 }
+
+  .cell .x-piece line {
+    stroke: var(--rust);
+    stroke-width: 10;
+    stroke-linecap: round;
+    stroke-dasharray: 100;
+    stroke-dashoffset: 100;
+  }
+
+  .cell.animate .x-piece line:nth-child(1) {
+    animation: draw-line 0.35s cubic-bezier(0.4,0,0.2,1) forwards;
+  }
+
+  .cell.animate .x-piece line:nth-child(2) {
+    animation: draw-line 0.35s cubic-bezier(0.4,0,0.2,1) 0.1s forwards;
+  }
+
+  .cell .o-piece circle {
+    stroke: var(--indigo);
+    stroke-width: 8;
+    fill: none;
+    stroke-linecap: round;
+    stroke-dasharray: 188;
+    stroke-dashoffset: 188;
+  }
+
+  .cell.animate .o-piece circle {
+    animation: draw-circle 0.45s cubic-bezier(0.4,0,0.2,1) forwards;
+  }
+
+  @keyframes draw-line { to { stroke-dashoffset: 0 } }
+  @keyframes draw-circle { to { stroke-dashoffset: 0 } }
+
+  .cell.win-cell .x-piece line { filter: drop-shadow(0 0 8px rgba(196,69,26,0.5)) }
+  .cell.win-cell .o-piece circle { filter: drop-shadow(0 0 8px rgba(43,58,103,0.5)) }
+  .cell.dim { opacity: 0.3; transition: opacity 0.5s ease }
+
+  /* --- model output panel --- */
+  .model-panel {
+    width: 220px;
+    flex-shrink: 0;
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid rgba(26,26,24,0.1);
+  }
+
+  .panel-title {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.65rem;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--stone);
+  }
+
+  .panel-mode {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.55rem;
+    color: var(--rust);
+    letter-spacing: 0.05em;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+  }
+
+  .panel-mode.visible { opacity: 1 }
+
+  .logit-grid {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 0.3rem 0.6rem;
+    align-items: center;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.7rem;
+  }
+
+  .logit-grid .cell-label {
+    color: var(--stone);
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    width: 2.2em;
+  }
+
+  .logit-grid .bar-container {
+    height: 14px;
+    background: rgba(26,26,24,0.04);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .logit-grid .bar {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.3s cubic-bezier(0.4,0,0.2,1), background 0.2s ease;
+  }
+
+  .logit-grid .bar.chosen { background: var(--indigo) }
+  .logit-grid .bar.legal { background: rgba(43,58,103,0.25) }
+  .logit-grid .bar.illegal { background: rgba(26,26,24,0.06) }
+
+  .logit-grid .prob-val {
+    text-align: right;
+    font-size: 0.6rem;
+    color: var(--ink);
+    font-weight: 400;
+    min-width: 3em;
+  }
+
+  .logit-grid .prob-val.muted { color: var(--stone); opacity: 0.5 }
+
+  .panel-section { margin-top: 1rem }
+
+  .raw-logits {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.55rem;
+    color: var(--stone);
+    line-height: 1.7;
+  }
+
+  .raw-logits .logit-val { color: var(--ink); font-weight: 400 }
+  .raw-logits .logit-val.neg { color: var(--stone) }
+  .raw-logits .logit-val.chosen-logit { color: var(--indigo); font-weight: 500 }
+
+  .panel-empty {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--stone);
+    font-style: italic;
+    opacity: 0.5;
+  }
+
+  .terminal-note {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.6rem;
+    color: var(--stone);
+    margin-top: 0.5rem;
+  }
+
+  .terminal-note .rust { color: var(--rust) }
+
+  /* --- status / controls --- */
+  .status-bar {
+    text-align: center;
+    min-height: 2.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .status-text {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.85rem;
+    font-weight: 400;
+    letter-spacing: 0.05em;
+    color: var(--stone);
+    text-transform: uppercase;
+  }
+
+  .status-text.highlight { color: var(--ink); font-weight: 500 }
+  .status-text .rust { color: var(--rust) }
+  .status-text .indigo { color: var(--indigo) }
+
+  .thinking {
+    display: inline-flex;
+    gap: 4px;
+    align-items: center;
+    margin-left: 0.4rem;
+  }
+
+  .thinking span {
+    width: 5px; height: 5px;
+    background: var(--indigo);
+    border-radius: 50%;
+    animation: pulse 1s ease-in-out infinite;
+  }
+
+  .thinking span:nth-child(2) { animation-delay: 0.15s }
+  .thinking span:nth-child(3) { animation-delay: 0.3s }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 0.2; transform: scale(0.8) }
+    50% { opacity: 1; transform: scale(1.2) }
+  }
+
+  .btn {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.8rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 0.6rem 1.6rem;
+    border: 2px solid var(--ink);
+    background: transparent;
+    color: var(--ink);
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .btn:hover { background: var(--ink); color: var(--cream) }
+  .btn:active { transform: scale(0.97) }
+
+  .score-bar {
+    display: flex;
+    gap: 2rem;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--stone);
+  }
+
+  .score-bar .val {
+    font-family: 'Fraunces', serif;
+    font-weight: 700;
+    font-size: 1.4rem;
+    color: var(--ink);
+    display: block;
+    line-height: 1;
+    margin-top: 0.2rem;
+  }
+
+  .score-bar .label-you .val { color: var(--rust) }
+  .score-bar .label-ai .val { color: var(--indigo) }
+
+  footer {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--stone);
+    letter-spacing: 0.05em;
+    margin-top: 0.5rem;
+  }
+
+  @media (max-width: 700px) {
+    .game-area { flex-direction: column; align-items: center; gap: 1.5rem }
+    .model-panel { width: calc(var(--cell-size) * 3) }
+  }
+
+  @media (max-width: 480px) {
+    .container { gap: 1.5rem; padding: 1.5rem }
+    .score-bar { gap: 1.2rem }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>Tic-Tac<span>vs. transformer</span></h1>
+  </header>
+
+  <div class="score-bar">
+    <div class="label-you">you (x)<span class="val" id="score-you">0</span></div>
+    <div class="label-draw">draw<span class="val" id="score-draw">0</span></div>
+    <div class="label-ai">model (o)<span class="val" id="score-ai">0</span></div>
+  </div>
+
+  <div class="game-area">
+    <div class="board" id="board"></div>
+
+    <div class="model-panel">
+      <div class="panel-header">
+        <div class="panel-title">Model Output</div>
+        <div class="panel-mode" id="panel-mode">what-if</div>
+      </div>
+      <div id="panel-content"></div>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <div class="status-text" id="status">Your move — hover to preview</div>
+  </div>
+
+  <button class="btn" id="reset-btn">New Game</button>
+  <footer>2-layer transformer &middot; 64d &middot; trained on minimax</footer>
+</div>
+
+<script>
+const EMPTY = 0, X_PIECE = 1, O_PIECE = 2;
+const CELL_NAMES = ['0,0','0,1','0,2','1,0','1,1','1,2','2,0','2,1','2,2'];
+
+const WIN_LINES = [
+  [0,1,2],[3,4,5],[6,7,8],
+  [0,3,6],[1,4,7],[2,5,8],
+  [0,4,8],[2,4,6]
+];
+
+const state = {
+  squares: Array(9).fill(EMPTY),
+  currentPlayer: X_PIECE,
+  gameOver: false,
+  thinking: false,
+  winner: null,
+  winLine: null,
+  scores: { you: 0, draw: 0, ai: 0 },
+  lastLogits: null,
+  lastProbs: null,
+  lastMove: null,
+  lastSquaresBefore: null,
+};
+
+let previewCache = {};
+let activePreview = null;
+let previewAbort = null;
+
+const boardEl = document.getElementById('board');
+const statusEl = document.getElementById('status');
+const resetBtn = document.getElementById('reset-btn');
+const panelContent = document.getElementById('panel-content');
+const panelMode = document.getElementById('panel-mode');
+
+function xSVG(cls) {
+  return `<svg class="x-piece ${cls || ''}" viewBox="0 0 80 80">
+    <line x1="18" y1="18" x2="62" y2="62"/>
+    <line x1="62" y1="18" x2="18" y2="62"/>
+  </svg>`;
+}
+
+function oSVG(cls) {
+  return `<svg class="o-piece ${cls || ''}" viewBox="0 0 80 80">
+    <circle cx="40" cy="40" r="24"/>
+  </svg>`;
+}
+
+function buildPanelHtml(probs, logits, chosen, legalMask, opts) {
+  const label = opts.label || '';
+  const terminal = opts.terminal || false;
+  const terminalWinner = opts.terminalWinner || null;
+
+  const legalProbs = probs.filter((_, i) => legalMask[i]);
+  const maxProb = legalProbs.length ? Math.max(...legalProbs) : 1;
+
+  let html = '<div class="logit-grid">';
+  for (let i = 0; i < 9; i++) {
+    const isLegal = legalMask[i];
+    const isChosen = i === chosen;
+    const p = probs[i];
+    const pct = isLegal && maxProb > 0 ? (p / maxProb * 100) : 0;
+    const cls = isChosen ? 'chosen' : (isLegal ? 'legal' : 'illegal');
+    const valCls = isLegal ? '' : 'muted';
+    const valLabel = isChosen ? `<b>${(p*100).toFixed(1)}%</b>` : (isLegal ? `${(p*100).toFixed(1)}%` : '—');
+    html += `<div class="cell-label">${CELL_NAMES[i]}</div>
+      <div class="bar-container"><div class="bar ${cls}" style="width:${pct}%"></div></div>
+      <div class="prob-val ${valCls}">${valLabel}</div>`;
+  }
+  html += '</div>';
+
+  if (logits) {
+    html += '<div class="panel-section"><div class="raw-logits"><b>raw logits</b><br>';
+    for (let i = 0; i < 9; i++) {
+      const v = logits[i];
+      const isChosen = i === chosen;
+      const cls = isChosen ? 'chosen-logit' : (v === null ? 'neg' : '');
+      const display = v === null ? '-inf' : v.toFixed(2);
+      html += `<span class="logit-val ${cls}">[${i}]&nbsp;${display}</span>`;
+      if (i < 8) html += '&ensp;';
+      if (i === 2 || i === 5) html += '<br>';
+    }
+    html += '</div></div>';
+  }
+
+  if (terminal) {
+    const msg = terminalWinner === 'X'
+      ? '<span class="rust">you win — no model response</span>'
+      : 'draw — no model response';
+    html += `<div class="terminal-note">${msg}</div>`;
+  }
+
+  return html;
+}
+
+function displayData(probs, logits, chosen, legalMask, opts) {
+  panelContent.innerHTML = buildPanelHtml(probs, logits, chosen, legalMask, opts);
+  panelMode.classList.toggle('visible', !!opts.isPreview);
+
+  const cells = boardEl.querySelectorAll('.cell');
+  cells.forEach((cell, i) => {
+    const overlay = cell.querySelector('.prob-overlay');
+    const probLbl = cell.querySelector('.prob-label');
+    const ghost = cell.querySelector('.ghost-piece');
+    const respMarker = cell.querySelector('.response-marker');
+
+    if (ghost) ghost.remove();
+    if (respMarker) respMarker.remove();
+
+    if (!overlay || !probLbl) return;
+
+    if (opts.isPreview && opts.previewMove === i) {
+      overlay.style.background = `rgba(196,69,26,0.12)`;
+      overlay.classList.add('visible');
+      probLbl.classList.remove('visible');
+      probLbl.textContent = '';
+      const g = document.createElement('div');
+      g.innerHTML = xSVG('ghost-piece');
+      const svg = g.firstElementChild;
+      svg.classList.add('ghost-piece');
+      svg.querySelectorAll('line').forEach(l => { l.style.strokeDashoffset = '0' });
+      cell.appendChild(svg);
+      return;
+    }
+
+    if (legalMask[i] && probs[i] > 0.001) {
+      const legalProbs = probs.filter((_, j) => legalMask[j]);
+      const maxP = Math.max(...legalProbs);
+      const intensity = probs[i] / maxP;
+      overlay.style.background = `rgba(43,58,103,${intensity * 0.18})`;
+      overlay.classList.add('visible');
+      if (probs[i] > 0.01) {
+        probLbl.textContent = (probs[i] * 100).toFixed(1) + '%';
+        probLbl.classList.add('visible');
+      } else {
+        probLbl.classList.remove('visible');
+      }
+      if (opts.isPreview && i === chosen) {
+        const m = document.createElement('div');
+        m.className = 'response-marker visible';
+        m.textContent = 'reply';
+        cell.appendChild(m);
+      }
+    } else {
+      overlay.style.background = 'transparent';
+      overlay.classList.remove('visible');
+      probLbl.classList.remove('visible');
+    }
+  });
+}
+
+function clearOverlays() {
+  const cells = boardEl.querySelectorAll('.cell');
+  cells.forEach(cell => {
+    const overlay = cell.querySelector('.prob-overlay');
+    const probLbl = cell.querySelector('.prob-label');
+    const ghost = cell.querySelector('.ghost-piece');
+    const respMarker = cell.querySelector('.response-marker');
+    if (overlay) { overlay.classList.remove('visible'); overlay.style.background = 'transparent' }
+    if (probLbl) { probLbl.classList.remove('visible') }
+    if (ghost) ghost.remove();
+    if (respMarker) respMarker.remove();
+  });
+  panelMode.classList.remove('visible');
+}
+
+function zeroPanel() {
+  const zeroProbs = [0,0,0,0,0,0,0,0,0];
+  const zeroLogits = [null,null,null,null,null,null,null,null,null];
+  const legalMask = state.squares.map(s => s === EMPTY);
+  panelContent.innerHTML = buildPanelHtml(zeroProbs, zeroLogits, null, legalMask, {});
+  panelMode.classList.remove('visible');
+}
+
+function showLastModelOutput() {
+  if (state.lastProbs) {
+    const legalMask = state.lastSquaresBefore.map(s => s === EMPTY);
+    displayData(state.lastProbs, state.lastLogits, state.lastMove, legalMask, { isPreview: false });
+  } else {
+    clearOverlays();
+    zeroPanel();
+  }
+}
+
+function renderBoard() {
+  boardEl.innerHTML = '';
+  for (let i = 0; i < 9; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'cell';
+    cell.dataset.idx = i;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'prob-overlay';
+    cell.appendChild(overlay);
+
+    const probLabel = document.createElement('div');
+    probLabel.className = 'prob-label';
+    cell.appendChild(probLabel);
+
+    if (state.squares[i] === X_PIECE) {
+      cell.insertAdjacentHTML('beforeend', xSVG());
+      cell.classList.add('taken', 'animate');
+    } else if (state.squares[i] === O_PIECE) {
+      cell.insertAdjacentHTML('beforeend', oSVG());
+      cell.classList.add('taken', 'animate');
+    }
+
+    if (state.gameOver) {
+      cell.classList.add('game-over');
+      if (state.winLine && state.winLine.includes(i)) cell.classList.add('win-cell');
+      else if (state.winLine) cell.classList.add('dim');
+    }
+
+    if (state.thinking) cell.classList.add('game-over');
+
+    cell.addEventListener('click', () => handleClick(i));
+    cell.addEventListener('mouseenter', () => handleHover(i));
+    cell.addEventListener('mouseleave', handleHoverEnd);
+    boardEl.appendChild(cell);
+  }
+}
+
+function renderStatus() {
+  if (state.thinking) {
+    statusEl.innerHTML = `Model thinking<span class="thinking"><span></span><span></span><span></span></span>`;
+  } else if (state.gameOver) {
+    if (state.winner === 'X') statusEl.innerHTML = `<span class="highlight"><span class="rust">You win!</span></span>`;
+    else if (state.winner === 'O') statusEl.innerHTML = `<span class="highlight"><span class="indigo">Model wins</span></span>`;
+    else statusEl.innerHTML = `<span class="highlight">Draw</span>`;
+  } else {
+    statusEl.textContent = 'Your move — hover to preview';
+  }
+}
+
+function renderScores() {
+  document.getElementById('score-you').textContent = state.scores.you;
+  document.getElementById('score-draw').textContent = state.scores.draw;
+  document.getElementById('score-ai').textContent = state.scores.ai;
+}
+
+function render() {
+  renderBoard();
+  renderStatus();
+  renderScores();
+  showLastModelOutput();
+}
+
+function findWinLine(squares) {
+  for (const line of WIN_LINES) {
+    const [a, b, c] = line;
+    if (squares[a] !== EMPTY && squares[a] === squares[b] && squares[b] === squares[c]) return line;
+  }
+  return null;
+}
+
+function cacheKey() {
+  return state.squares.join(',');
+}
+
+async function fetchPreview(idx) {
+  const key = cacheKey() + ':' + idx;
+  if (previewCache[key]) return previewCache[key];
+
+  const resp = await fetch('/api/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      squares: state.squares,
+      currentPlayer: state.currentPlayer,
+      move: idx,
+    })
+  });
+  const data = await resp.json();
+  previewCache[key] = data;
+  return data;
+}
+
+async function handleHover(idx) {
+  if (state.gameOver || state.thinking) return;
+  if (state.squares[idx] !== EMPTY) return;
+  if (state.currentPlayer !== X_PIECE) return;
+
+  activePreview = idx;
+
+  try {
+    const data = await fetchPreview(idx);
+    if (activePreview !== idx) return;
+
+    if (data.isTerminal) {
+      const legalMask = Array(9).fill(false);
+      displayData(
+        [0,0,0,0,0,0,0,0,0], null, null, legalMask,
+        { isPreview: true, previewMove: idx, terminal: true, terminalWinner: data.winner }
+      );
+    } else {
+      const afterHuman = [...state.squares];
+      afterHuman[idx] = X_PIECE;
+      const legalMask = afterHuman.map(s => s === EMPTY);
+      displayData(
+        data.probs, data.logits, data.modelMove, legalMask,
+        { isPreview: true, previewMove: idx }
+      );
+    }
+  } catch (e) {
+    console.error('Preview fetch failed:', e);
+  }
+}
+
+function handleHoverEnd() {
+  activePreview = null;
+  showLastModelOutput();
+}
+
+async function handleClick(idx) {
+  if (state.gameOver || state.thinking) return;
+  if (state.squares[idx] !== EMPTY) return;
+  if (state.currentPlayer !== X_PIECE) return;
+
+  activePreview = null;
+  state.squares[idx] = X_PIECE;
+  state.currentPlayer = O_PIECE;
+
+  const wl = findWinLine(state.squares);
+  if (wl) {
+    state.gameOver = true;
+    state.winner = 'X';
+    state.winLine = wl;
+    state.scores.you++;
+    render();
+    return;
+  }
+
+  if (state.squares.every(s => s !== EMPTY)) {
+    state.gameOver = true;
+    state.winner = null;
+    state.scores.draw++;
+    render();
+    return;
+  }
+
+  state.thinking = true;
+  const squaresBefore = [...state.squares];
+  render();
+
+  try {
+    const resp = await fetch('/api/move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ squares: state.squares, currentPlayer: O_PIECE })
+    });
+    const data = await resp.json();
+    await new Promise(r => setTimeout(r, 400));
+
+    state.lastLogits = data.logits;
+    state.lastProbs = data.probs;
+    state.lastMove = data.move;
+    state.lastSquaresBefore = squaresBefore;
+
+    state.squares = data.squares;
+    state.currentPlayer = data.currentPlayer;
+    state.thinking = false;
+    previewCache = {};
+
+    if (data.winner) {
+      state.gameOver = true;
+      state.winner = data.winner;
+      state.winLine = findWinLine(state.squares);
+      if (data.winner === 'O') state.scores.ai++;
+      else state.scores.you++;
+    } else if (data.isTerminal) {
+      state.gameOver = true;
+      state.winner = null;
+      state.scores.draw++;
+    }
+  } catch (e) {
+    state.thinking = false;
+    statusEl.textContent = 'Error — try again';
+    console.error(e);
+  }
+
+  render();
+}
+
+function resetGame() {
+  state.squares = Array(9).fill(EMPTY);
+  state.currentPlayer = X_PIECE;
+  state.gameOver = false;
+  state.thinking = false;
+  state.winner = null;
+  state.winLine = null;
+  state.lastLogits = null;
+  state.lastProbs = null;
+  state.lastMove = null;
+  state.lastSquaresBefore = null;
+  previewCache = {};
+  activePreview = null;
+  render();
+}
+
+resetBtn.addEventListener('click', resetGame);
+render();
+</script>
+</body>
+</html>
