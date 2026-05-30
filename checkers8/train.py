@@ -1,4 +1,5 @@
 import json
+import os
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
@@ -9,29 +10,32 @@ from checkers8.model import CheckersTransformer
 
 class CheckersDataset(Dataset):
     def __init__(self, data):
-        self.data = data
+        # The token ids and legal-move masks are deterministic per position, so
+        # precompute them once instead of regenerating legal moves for every
+        # item on every epoch (that Python work dominated each epoch's runtime).
+        self.tokens = []
+        self.targets = []
+        self.legal = []
+        for i, item in enumerate(data):
+            fen = item['fen']
+            self.tokens.append(torch.tensor(pad_sequence(encode_fen(fen)), dtype=torch.long))
+            self.targets.append(torch.tensor(item['move_idx'], dtype=torch.long))
+
+            board = fen_to_board(fen)
+            legal = torch.zeros(NUM_MOVES, dtype=torch.bool)
+            for move in board.legal_moves():
+                origin, steps = move
+                legal[encode_move(origin, steps[-1])] = True
+            self.legal.append(legal)
+
+            if (i + 1) % 2000 == 0:
+                print(f'  precomputed {i + 1}/{len(data)} positions', flush=True)
 
     def __len__(self):
-        return len(self.data)
+        return len(self.tokens)
 
     def __getitem__(self, idx):
-        item = self.data[idx]
-        fen = item['fen']
-        move_idx = item['move_idx']
-        token_ids = pad_sequence(encode_fen(fen))
-
-        board = fen_to_board(fen)
-        legal = [False] * NUM_MOVES
-        for move in board.legal_moves():
-            origin, steps = move
-            final = steps[-1]
-            legal[encode_move(origin, final)] = True
-
-        return (
-            torch.tensor(token_ids, dtype=torch.long),
-            torch.tensor(move_idx, dtype=torch.long),
-            torch.tensor(legal, dtype=torch.bool),
-        )
+        return self.tokens[idx], self.targets[idx], self.legal[idx]
 
 
 def save_cpu_state(model, path):
@@ -41,9 +45,14 @@ def save_cpu_state(model, path):
 
 
 def train(epochs=200, lr=1e-3, batch_size=512, data_path='checkers8/data.json',
-          out_path='checkers8/model.pt', device=None):
+          out_path='checkers8/model.pt', device=None, resume=False):
     if device is None:
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        if torch.cuda.is_available():
+            device = 'cuda'
+        elif torch.backends.mps.is_available():
+            device = 'mps'
+        else:
+            device = 'cpu'
     print(f'Device: {device}')
 
     with open(data_path) as f:
@@ -52,10 +61,15 @@ def train(epochs=200, lr=1e-3, batch_size=512, data_path='checkers8/data.json',
     print(f'Training on {len(data)} positions')
     dataset = CheckersDataset(data)
     pin = device == 'cuda'
+    # __getitem__ is now a trivial tensor lookup, so worker processes add only
+    # fork overhead; keep it single-process.
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True,
-                        num_workers=2, pin_memory=pin)
+                        num_workers=0, pin_memory=pin)
 
     model = CheckersTransformer().to(device)
+    if resume and os.path.exists(out_path):
+        model.load_state_dict(torch.load(out_path, map_location=device))
+        print(f'Warm-started from {out_path}')
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
 
@@ -79,13 +93,15 @@ def train(epochs=200, lr=1e-3, batch_size=512, data_path='checkers8/data.json',
             total += x.size(0)
 
         acc = correct / total
-        if acc > best_acc:
+        avg_loss = total_loss / total
+        improved = acc > best_acc
+        if improved:
             best_acc = acc
             save_cpu_state(model, out_path)
 
-        if epoch % 10 == 0 or epoch == 1:
-            avg_loss = total_loss / total
-            print(f'Epoch {epoch:3d} | Loss: {avg_loss:.4f} | Accuracy: {acc:.4f}', flush=True)
+        print(f'Epoch {epoch:3d}/{epochs} | Loss: {avg_loss:.4f} | '
+              f'Accuracy: {acc:.4f} | Best: {best_acc:.4f}'
+              f"{'  *saved' if improved else ''}", flush=True)
 
     save_cpu_state(model, out_path)
     print(f'Model saved to {out_path}. Best accuracy: {best_acc:.4f}')
