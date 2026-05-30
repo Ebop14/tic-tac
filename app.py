@@ -264,6 +264,7 @@ def checkers_move():
 
     return jsonify({
         'userFen': user_fen,
+        'userSquares': after_user.squares,
         'fen': model_fen,
         'squares': after_model.squares,
         'isTerminal': after_model.is_terminal(),
@@ -451,6 +452,7 @@ def checkers8_move():
 
     return jsonify({
         'userFen': user_fen,
+        'userSquares': after_user.squares,
         'fen': model_fen,
         'squares': after_model.squares,
         'isTerminal': after_model.is_terminal(),

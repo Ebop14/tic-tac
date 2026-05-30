@@ -111,6 +111,7 @@
     border: 3px solid var(--ink);
     border-radius: 2px;
     overflow: hidden;
+    position: relative;
   }
 
   .cell {
@@ -275,6 +276,19 @@
   @keyframes pop-in {
     from { transform: scale(0.6); opacity: 0.5 }
     to { transform: scale(1); opacity: 1 }
+  }
+
+  /* A transient piece that slides between squares during a move. The real
+     piece at the origin is hidden while this animates; the next board render
+     removes the flyer and draws the piece in its final square. */
+  .flying-piece {
+    position: absolute;
+    left: 0;
+    top: 0;
+    z-index: 6;
+    pointer-events: none;
+    will-change: transform;
+    filter: drop-shadow(0 6px 9px rgba(0,0,0,0.28));
   }
 
   /* --- model output panel --- */
@@ -934,53 +948,151 @@ function handleClick(sq) {
   }
 }
 
+// --- Move slide animation ---
+
+const SLIDE_MS = 240;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function cellCenter(sq) {
+  const cell = boardEl.querySelector(`.cell[data-sq="${sq}"]`);
+  if (!cell) return null;
+  return {
+    x: cell.offsetLeft + cell.offsetWidth / 2,
+    y: cell.offsetTop + cell.offsetHeight / 2,
+    size: cell.offsetWidth,
+  };
+}
+
+// The square jumped over when moving a->b, or null for a simple step.
+function midSquare(a, b) {
+  const [ar, ac] = SQ_TO_RC[a];
+  const [br, bc] = SQ_TO_RC[b];
+  if (Math.abs(br - ar) !== 2) return null;
+  return RC_TO_SQ[((ar + br) / 2) + ',' + ((ac + bc) / 2)];
+}
+
+// Slide a piece from `origin` through each square in `steps`, fading any
+// captured piece as it is hopped. Resolves once the flyer rests on the final
+// square; the caller re-renders the board (which removes the flyer) afterwards.
+function animateSlide(origin, steps, pieceType) {
+  return new Promise(resolve => {
+    const start = cellCenter(origin);
+    if (!start || !steps || steps.length === 0) { resolve(); return; }
+
+    const size = start.size * 0.72;
+    const originCell = boardEl.querySelector(`.cell[data-sq="${origin}"]`);
+    const originPiece = originCell && originCell.querySelector('.piece:not(.ghost):not(.flying-piece)');
+    if (originPiece) originPiece.style.visibility = 'hidden';
+
+    const flyer = document.createElement('div');
+    flyer.className = pieceClass(pieceType) + ' flying-piece';
+    flyer.style.width = size + 'px';
+    flyer.style.height = size + 'px';
+    const place = c => { flyer.style.transform = `translate(${c.x - size / 2}px, ${c.y - size / 2}px)`; };
+    flyer.style.transition = 'none';
+    place(start);
+    boardEl.appendChild(flyer);
+    void flyer.offsetWidth; // flush the start position before transitioning
+    flyer.style.transition = `transform ${SLIDE_MS}ms cubic-bezier(0.45, 0, 0.25, 1)`;
+
+    let prev = origin;
+    let i = 0;
+    const hop = () => {
+      if (i >= steps.length) { resolve(); return; }
+      const sq = steps[i];
+      const mid = midSquare(prev, sq);
+      if (mid != null) {
+        const midCell = boardEl.querySelector(`.cell[data-sq="${mid}"]`);
+        const midPiece = midCell && midCell.querySelector('.piece:not(.ghost):not(.flying-piece)');
+        if (midPiece) midPiece.classList.add('captured');
+      }
+      prev = sq;
+      i++;
+      const target = cellCenter(sq);
+      if (!target) { hop(); return; }
+      let finished = false;
+      const onEnd = () => {
+        if (finished) return;
+        finished = true;
+        flyer.removeEventListener('transitionend', onEnd);
+        hop();
+      };
+      flyer.addEventListener('transitionend', onEnd);
+      setTimeout(onEnd, SLIDE_MS + 80); // fallback in case transitionend is missed
+      requestAnimationFrame(() => place(target));
+    };
+    hop();
+  });
+}
+
 async function makeMove(origin, dest) {
+  const userMove = state.legalMoves.find(m => m.origin === origin && m.dest === dest);
+  const userSteps = userMove ? userMove.steps : [dest];
+  const movingPiece = state.squares[origin];
+
   state.selected = null;
   state.thinking = true;
   state.lastModelMove = null;
   state.lastMoveProbs = null;
   render();
 
+  // Fire the request and slide the player's piece at the same time.
+  const movePromise = fetch('/checkers/api/move', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fen: state.fen, origin, dest }),
+  }).then(r => r.json());
+
+  await animateSlide(origin, userSteps, movingPiece);
+
+  let data;
   try {
-    const resp = await fetch('/checkers/api/move', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fen: state.fen, origin, dest }),
-    });
-    const data = await resp.json();
-
-    if (data.error) {
-      state.thinking = false;
-      statusEl.textContent = 'Invalid move — try again';
-      render();
-      return;
-    }
-
-    await new Promise(r => setTimeout(r, 350));
-
-    state.fen = data.fen;
-    state.squares = data.squares;
-    state.legalMoves = data.legalMoves || [];
-    state.thinking = false;
-    previewCache = {};
-
-    if (data.modelResponse) {
-      state.lastModelMove = { origin: data.modelResponse.origin, dest: data.modelResponse.dest };
-      state.lastMoveProbs = data.modelResponse.moveProbs;
-    }
-
-    if (data.isTerminal) {
-      state.gameOver = true;
-      state.result = data.result;
-      if (data.result === 1) state.scores.ai++;
-      else if (data.result === -1) state.scores.you++;
-      else state.scores.draw++;
-    }
-
+    data = await movePromise;
   } catch (e) {
     state.thinking = false;
     statusEl.textContent = 'Error — try again';
     console.error(e);
+    render();
+    return;
+  }
+
+  if (data.error) {
+    state.thinking = false;
+    statusEl.textContent = 'Invalid move — try again';
+    render();
+    return;
+  }
+
+  previewCache = {};
+
+  // Settle into the post-player position so the model's reply animates from a
+  // correct board. This matches where the slide ended, so there's no jump.
+  if (data.userSquares) {
+    state.fen = data.userFen;
+    state.squares = data.userSquares;
+    render();
+  }
+
+  if (data.modelResponse) {
+    const mr = data.modelResponse;
+    const modelPiece = (data.userSquares || state.squares)[mr.origin];
+    await sleep(180); // brief beat so the "thinking" indicator registers
+    await animateSlide(mr.origin, mr.steps, modelPiece);
+    state.lastModelMove = { origin: mr.origin, dest: mr.dest };
+    state.lastMoveProbs = mr.moveProbs;
+  }
+
+  state.fen = data.fen;
+  state.squares = data.squares;
+  state.legalMoves = data.legalMoves || [];
+  state.thinking = false;
+
+  if (data.isTerminal) {
+    state.gameOver = true;
+    state.result = data.result;
+    if (data.result === 1) state.scores.ai++;
+    else if (data.result === -1) state.scores.you++;
+    else state.scores.draw++;
   }
 
   render();
