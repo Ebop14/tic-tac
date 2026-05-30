@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>checkers — vs transformer</title>
+<title>checkers 8x8 — vs transformer</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Fraunces:ital,opsz,wght@0,9..144,100..900;1,9..144,100..900&display=swap" rel="stylesheet">
@@ -18,7 +18,7 @@
     --stone: #a8a08e;
     --dark-sq: #b8a88a;
     --light-sq: #e8e0d0;
-    --cell-size: min(22vw, 110px);
+    --cell-size: min(10vw, 62px);
   }
 
   html { font-size: 16px }
@@ -106,8 +106,8 @@
 
   .board {
     display: grid;
-    grid-template-columns: repeat(4, var(--cell-size));
-    grid-template-rows: repeat(4, var(--cell-size));
+    grid-template-columns: repeat(8, var(--cell-size));
+    grid-template-rows: repeat(8, var(--cell-size));
     border: 3px solid var(--ink);
     border-radius: 2px;
     overflow: hidden;
@@ -179,9 +179,9 @@
 
   .cell .prob-label {
     position: absolute;
-    bottom: 5px; right: 6px;
+    bottom: 3px; right: 4px;
     font-family: 'DM Mono', monospace;
-    font-size: 0.55rem;
+    font-size: 0.5rem;
     font-weight: 500;
     z-index: 5;
     color: var(--indigo);
@@ -193,9 +193,9 @@
 
   .cell .response-marker {
     position: absolute;
-    top: 4px; left: 5px;
+    top: 3px; left: 4px;
     font-family: 'DM Mono', monospace;
-    font-size: 0.45rem;
+    font-size: 0.4rem;
     font-weight: 500;
     color: var(--indigo);
     z-index: 5;
@@ -244,7 +244,7 @@
     content: 'K';
     font-family: 'Fraunces', serif;
     font-weight: 900;
-    font-size: calc(var(--cell-size) * 0.28);
+    font-size: calc(var(--cell-size) * 0.32);
     line-height: 1;
   }
 
@@ -281,6 +281,8 @@
   .model-panel {
     width: 240px;
     flex-shrink: 0;
+    max-height: calc(var(--cell-size) * 8);
+    overflow-y: auto;
   }
 
   .panel-header {
@@ -326,7 +328,7 @@
 
   .move-row {
     display: grid;
-    grid-template-columns: 3.5em 1fr 3.5em;
+    grid-template-columns: 4em 1fr 3.5em;
     gap: 0.5rem;
     align-items: center;
     font-family: 'DM Mono', monospace;
@@ -373,6 +375,7 @@
     letter-spacing: 0.02em;
     padding-left: 0.2rem;
     margin-bottom: 0.2rem;
+    word-break: break-all;
   }
 
   .move-item.chosen .move-fen { color: rgba(43,58,103,0.6) }
@@ -498,9 +501,9 @@
     margin-top: 0.5rem;
   }
 
-  @media (max-width: 700px) {
+  @media (max-width: 760px) {
     .game-area { flex-direction: column; align-items: center; gap: 1.5rem }
-    .model-panel { width: calc(var(--cell-size) * 4) }
+    .model-panel { width: calc(var(--cell-size) * 8); max-height: none }
   }
 
   @media (max-width: 480px) {
@@ -515,13 +518,13 @@
   <nav class="game-nav">
     <a href="/">tic-tac</a>
     <span class="sep">/</span>
-    <a href="/checkers" class="active">checkers 4x4</a>
+    <a href="/checkers">checkers 4x4</a>
     <span class="sep">/</span>
-    <a href="/checkers8">checkers 8x8</a>
+    <a href="/checkers8" class="active">checkers 8x8</a>
   </nav>
 
   <header>
-    <h1>Checkers<span>vs. transformer</span></h1>
+    <h1>Checkers<span>8&times;8 &middot; vs. transformer</span></h1>
   </header>
 
   <div class="score-bar">
@@ -549,16 +552,26 @@
   </div>
 
   <button class="btn" id="reset-btn">New Game</button>
-  <footer>4x4 &middot; 2-layer transformer &middot; 64d &middot; trained on minimax</footer>
+  <footer>8x8 &middot; 3-layer transformer &middot; 128d &middot; trained on depth-limited minimax</footer>
 </div>
 
 <script>
 const C_EMPTY = 0, BLACK_MAN = 1, WHITE_MAN = 2, BLACK_KING = 3, WHITE_KING = 4;
 const C_BLACK = 1, C_WHITE = 2;
+const SIZE = 8;
 
-const SQ_TO_RC = {1:[0,1],2:[0,3],3:[1,0],4:[1,2],5:[2,1],6:[2,3],7:[3,0],8:[3,2]};
+// Dark (playable) squares numbered 1..32, left-to-right, top-to-bottom.
+const SQ_TO_RC = {};
+(function () {
+  let n = 1;
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      if ((r + c) % 2 === 1) { SQ_TO_RC[n] = [r, c]; n++; }
+    }
+  }
+})();
 const RC_TO_SQ = {};
-for (const [sq, [r,c]] of Object.entries(SQ_TO_RC)) RC_TO_SQ[r+','+c] = parseInt(sq);
+for (const [sq, [r, c]] of Object.entries(SQ_TO_RC)) RC_TO_SQ[r + ',' + c] = parseInt(sq);
 
 function pieceOwner(p) {
   if (p === BLACK_MAN || p === BLACK_KING) return C_BLACK;
@@ -576,11 +589,18 @@ function pieceClass(p) {
   return map[p] || '';
 }
 
-const INITIAL_FEN = 'B:W7,8:B1,2';
+const INITIAL_FEN = 'B:W21,22,23,24,25,26,27,28,29,30,31,32:B1,2,3,4,5,6,7,8,9,10,11,12';
+
+function initialSquares() {
+  const s = new Array(33).fill(C_EMPTY);
+  for (let i = 1; i <= 12; i++) s[i] = BLACK_MAN;
+  for (let i = 21; i <= 32; i++) s[i] = WHITE_MAN;
+  return s;
+}
 
 const state = {
   fen: INITIAL_FEN,
-  squares: [C_EMPTY, BLACK_MAN, BLACK_MAN, C_EMPTY, C_EMPTY, C_EMPTY, C_EMPTY, WHITE_MAN, WHITE_MAN],
+  squares: initialSquares(),
   currentPlayer: C_BLACK,
   selected: null,
   legalMoves: [],
@@ -730,9 +750,9 @@ function showLastModelOutput() {
 
 function renderBoard() {
   boardEl.innerHTML = '';
-  for (let displayRow = 0; displayRow < 4; displayRow++) {
-    const boardRow = 3 - displayRow;
-    for (let col = 0; col < 4; col++) {
+  for (let displayRow = 0; displayRow < SIZE; displayRow++) {
+    const boardRow = (SIZE - 1) - displayRow;
+    for (let col = 0; col < SIZE; col++) {
       const cell = document.createElement('div');
       const isDark = (boardRow + col) % 2 === 1;
       cell.className = 'cell ' + (isDark ? 'dark' : 'light');
@@ -838,7 +858,7 @@ async function fetchPreview(origin, dest) {
   const key = previewKey(origin, dest);
   if (previewCache[key]) return previewCache[key];
 
-  const resp = await fetch('/checkers/api/preview', {
+  const resp = await fetch('/checkers8/api/preview', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ fen: state.fen, origin, dest }),
@@ -942,7 +962,7 @@ async function makeMove(origin, dest) {
   render();
 
   try {
-    const resp = await fetch('/checkers/api/move', {
+    const resp = await fetch('/checkers8/api/move', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fen: state.fen, origin, dest }),
@@ -988,7 +1008,7 @@ async function makeMove(origin, dest) {
 
 async function fetchInitialState() {
   try {
-    const resp = await fetch('/checkers/api/state', {
+    const resp = await fetch('/checkers8/api/state', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fen: state.fen }),
@@ -1005,7 +1025,7 @@ async function fetchInitialState() {
 
 function resetGame() {
   state.fen = INITIAL_FEN;
-  state.squares = [C_EMPTY, BLACK_MAN, BLACK_MAN, C_EMPTY, C_EMPTY, C_EMPTY, C_EMPTY, WHITE_MAN, WHITE_MAN];
+  state.squares = initialSquares();
   state.currentPlayer = C_BLACK;
   state.selected = null;
   state.legalMoves = [];
