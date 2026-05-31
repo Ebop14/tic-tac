@@ -22,7 +22,11 @@ class TicTacToeTransformer(nn.Module):
         # pool over non-padding positions
         mask = (~pad_mask).unsqueeze(-1).float()
         h = (h * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
-        logits = self.head(h)
+        # Per-move value head: tanh bounds outputs to [-1, 1], matching the
+        # depth-discounted minimax value targets. During training call without
+        # legal_mask (the loss is masked instead); at inference pass legal_mask
+        # so illegal moves drop out of argmax / softmax.
+        values = torch.tanh(self.head(h))
         if legal_mask is not None:
-            logits = logits.masked_fill(~legal_mask, float('-inf'))
-        return logits
+            values = values.masked_fill(~legal_mask, float('-inf'))
+        return values

@@ -72,3 +72,39 @@ def minimax(board, alpha=-2, beta=2):
             if alpha >= beta:
                 break
         return best_val, best_move
+
+
+# --- Depth-discounted minimax values ---
+#
+# Absolute convention (X maximizes, O minimizes). Terminal nodes return the
+# raw result (+1 / 0 / -1); internal nodes back up gamma * best_child so the
+# magnitude decays with distance to the end. A win-in-3 (gamma**2) therefore
+# scores higher than a win-in-7, and a loss-in-5 is less bad than a loss-in-1.
+# No alpha-beta here: discounting breaks the simple ±bound pruning, and the
+# tic-tac-toe tree is small enough to search exhaustively (memoized).
+GAMMA = 0.9
+_value_cache = {}
+
+
+def minimax_value(board, gamma=GAMMA):
+    if board.is_terminal():
+        return board.result()
+    key = (tuple(board.squares), board.current_player)
+    cached = _value_cache.get(key)
+    if cached is not None:
+        return cached
+    child_vals = [minimax_value(board.make_move(m), gamma) for m in board.legal_moves()]
+    backed = max(child_vals) if board.current_player == X else min(child_vals)
+    val = gamma * backed
+    _value_cache[key] = val
+    return val
+
+
+def move_values(board, gamma=GAMMA):
+    """Per-move values from the perspective of the player to move.
+
+    Higher is always better for whoever is on the move, regardless of side.
+    """
+    sign = 1 if board.current_player == X else -1
+    return {m: sign * minimax_value(board.make_move(m), gamma)
+            for m in board.legal_moves()}

@@ -1,4 +1,5 @@
 import math
+import random
 import torch
 import torch.nn.functional as F
 from flask import Flask, render_template, request, jsonify
@@ -65,9 +66,10 @@ def sanitize_logits(logits):
 
 # --- Move sampling (temperature + top-k) ---
 #
-# Difficulty presets map to (temperature, top_k). Higher temperature spreads
-# probability across moves (more human, more mistakes); top_k caps how many of
-# the best moves are even considered, so the model never plays an absurd blunder.
+# Used by the checkers models, which are move *classifiers*: their logits are
+# uncalibrated, so we scale to unit spread (see sample_index) before applying
+# temperature. Difficulty presets map to (temperature, top_k); top_k caps how
+# many of the best moves are even considered so the model never blunders wildly.
 # "sharp" with top_k=1 reproduces the old deterministic argmax (unbeatable).
 DIFFICULTY = {
     'chill': (1.6, 5),
@@ -79,6 +81,37 @@ DIFFICULTY = {
 def resolve_sampling(data):
     name = str(data.get('difficulty', 'balanced')).lower()
     return DIFFICULTY.get(name, DIFFICULTY['balanced'])
+
+
+# --- Value-tolerance selection ---
+#
+# Used by the tic-tac-toe model, which regresses depth-discounted minimax
+# *values* per move (calibrated, in [-1, 1]). Difficulty is a value tolerance:
+# how far below the best move's value a move may be and still be considered.
+# A win sits ~1.0 above a draw, so chill (1.0) will trade a win for a draw or a
+# draw for a slow loss (beatable), balanced only varies among near-equal moves,
+# and sharp (0.0) plays optimally (ties broken uniformly).
+VALUE_DIFFICULTY = {
+    'chill': 1.0,
+    'balanced': 0.15,
+    'sharp': 0.0,
+}
+
+
+def resolve_tolerance(data):
+    name = str(data.get('difficulty', 'balanced')).lower()
+    return VALUE_DIFFICULTY.get(name, VALUE_DIFFICULTY['balanced'])
+
+
+def select_by_value(values_row, tolerance):
+    """Pick uniformly among legal moves within `tolerance` of the best value."""
+    legal_idx = torch.nonzero(torch.isfinite(values_row), as_tuple=False).flatten().tolist()
+    if not legal_idx:
+        return int(torch.argmax(values_row).item())
+    vals = {i: values_row[i].item() for i in legal_idx}
+    best = max(vals.values())
+    candidates = [i for i, v in vals.items() if v >= best - tolerance]
+    return random.choice(candidates)
 
 
 def sample_index(logits_row, temperature=1.0, top_k=1):
@@ -109,7 +142,7 @@ def sample_index(logits_row, temperature=1.0, top_k=1):
 
 # --- Tic-Tac-Toe ---
 
-def ttt_move_with_details(board, temperature=1.0, top_k=1):
+def ttt_move_with_details(board, tolerance=0.0):
     fen = board_to_fen(board)
     token_ids = pad_sequence(encode_fen(fen))
     x = torch.tensor([token_ids], dtype=torch.long)
@@ -118,10 +151,12 @@ def ttt_move_with_details(board, temperature=1.0, top_k=1):
         legal[m] = True
     mask = torch.tensor([legal], dtype=torch.bool)
     with torch.no_grad():
-        logits = ttt_model(x, legal_mask=mask)
-    probs = F.softmax(logits, dim=1)
-    move = sample_index(logits[0], temperature, top_k)
-    return move, logits[0].tolist(), probs[0].tolist()
+        values = ttt_model(x, legal_mask=mask)
+    # The panel shows softmax(values) as a quality distribution; selection uses
+    # the raw values directly via the difficulty tolerance.
+    probs = F.softmax(values, dim=1)
+    move = select_by_value(values[0], tolerance)
+    return move, values[0].tolist(), probs[0].tolist()
 
 
 @app.route('/')
@@ -139,8 +174,8 @@ def get_move():
     if board.is_terminal():
         return jsonify({'error': 'Game is already over'}), 400
 
-    temperature, top_k = resolve_sampling(data)
-    move, logits, probs = ttt_move_with_details(board, temperature, top_k)
+    tolerance = resolve_tolerance(data)
+    move, logits, probs = ttt_move_with_details(board, tolerance)
     new_board = board.make_move(move)
 
     winner = new_board.check_winner()
