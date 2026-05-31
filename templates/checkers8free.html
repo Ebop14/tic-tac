@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>checkers 8x8 — vs transformer</title>
+<title>checkers 8x8 free — vs transformer</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Fraunces:ital,opsz,wght@0,9..144,100..900;1,9..144,100..900&display=swap" rel="stylesheet">
@@ -545,13 +545,13 @@
     <span class="sep">/</span>
     <a href="/checkers">checkers 4x4</a>
     <span class="sep">/</span>
-    <a href="/checkers8" class="active">checkers 8x8</a>
+    <a href="/checkers8">checkers 8x8</a>
     <span class="sep">/</span>
-    <a href="/checkers8free">checkers 8x8 free</a>
+    <a href="/checkers8free" class="active">checkers 8x8 free</a>
   </nav>
 
   <header>
-    <h1>Checkers<span>8&times;8 &middot; vs. transformer</span></h1>
+    <h1>Checkers<span>8&times;8 free &middot; captures optional</span></h1>
   </header>
 
   <div class="score-bar">
@@ -893,7 +893,7 @@ async function fetchPreview(origin, dest) {
   const key = previewKey(origin, dest);
   if (previewCache[key]) return previewCache[key];
 
-  const resp = await fetch('/checkers8/api/preview', {
+  const resp = await fetch('/checkers8free/api/preview', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ fen: state.fen, origin, dest }),
@@ -1078,7 +1078,7 @@ async function makeMove(origin, dest) {
   render();
 
   // Fire the request and slide the player's piece at the same time.
-  const movePromise = fetch('/checkers8/api/move', {
+  const movePromise = fetch('/checkers8free/api/move', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ fen: state.fen, origin, dest }),
@@ -1141,7 +1141,7 @@ async function makeMove(origin, dest) {
 
 async function fetchInitialState() {
   try {
-    const resp = await fetch('/checkers8/api/state', {
+    const resp = await fetch('/checkers8free/api/state', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fen: state.fen }),

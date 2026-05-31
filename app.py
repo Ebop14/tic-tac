@@ -30,6 +30,16 @@ from checkers8.codebook import (
 )
 from checkers8.model import CheckersTransformer as Checkers8Transformer
 
+from checkers8free.game import (
+    SQUARE_TO_RC as C8F_SQUARE_TO_RC, RC_TO_SQUARE as C8F_RC_TO_SQUARE,
+)
+from checkers8free.notation import board_to_fen as c8f_board_to_fen, fen_to_board as c8f_fen_to_board
+from checkers8free.codebook import (
+    encode_fen as c8f_encode_fen, pad_sequence as c8f_pad_sequence,
+    encode_move as c8f_encode_move, NUM_MOVES as C8F_NUM_MOVES,
+)
+from checkers8free.model import CheckersTransformer as Checkers8FreeTransformer
+
 app = Flask(__name__)
 
 ttt_model = TicTacToeTransformer()
@@ -43,6 +53,10 @@ checkers_model.eval()
 checkers8_model = Checkers8Transformer()
 checkers8_model.load_state_dict(torch.load('checkers8/model.pt', weights_only=True))
 checkers8_model.eval()
+
+checkers8free_model = Checkers8FreeTransformer()
+checkers8free_model.load_state_dict(torch.load('checkers8free/model.pt', weights_only=True))
+checkers8free_model.eval()
 
 
 def sanitize_logits(logits):
@@ -500,6 +514,195 @@ def checkers8_preview():
 
     model_move, logits, probs, _ = checkers8_infer(after_user)
     move_probs = checkers8_move_probs(after_user, logits, probs)
+    m_origin, m_steps = model_move
+
+    return jsonify({
+        'userFen': user_fen,
+        'captured': captured,
+        'isTerminal': False,
+        'modelResponse': {
+            'origin': m_origin,
+            'dest': m_steps[-1],
+            'moveProbs': move_probs,
+        },
+    })
+
+
+# --- Checkers (8x8, captures optional) ---
+
+def checkers8free_infer(board):
+    fen = c8f_board_to_fen(board)
+    tokens = c8f_pad_sequence(c8f_encode_fen(fen))
+    x = torch.tensor([tokens], dtype=torch.long)
+    legal = [False] * C8F_NUM_MOVES
+    move_map = {}
+    for move in board.legal_moves():
+        origin, steps = move
+        mi = c8f_encode_move(origin, steps[-1])
+        legal[mi] = True
+        move_map[mi] = move
+    mask = torch.tensor([legal], dtype=torch.bool)
+    with torch.no_grad():
+        logits = checkers8free_model(x, legal_mask=mask)
+    probs = F.softmax(logits, dim=1)
+    pred_idx = logits.argmax(dim=1).item()
+    return move_map[pred_idx], logits[0].tolist(), probs[0].tolist(), move_map
+
+
+def checkers8free_legal_json(board):
+    moves = []
+    if board.is_terminal():
+        return moves
+    for move in board.legal_moves():
+        origin, steps = move
+        moves.append({'origin': origin, 'dest': steps[-1], 'steps': steps})
+    return moves
+
+
+def checkers8free_captured(move):
+    origin, steps = move
+    captured = []
+    prev = origin
+    for step in steps:
+        pr, pc = C8F_SQUARE_TO_RC[prev]
+        sr, sc = C8F_SQUARE_TO_RC[step]
+        if abs(sr - pr) == 2:
+            mid_sq = C8F_RC_TO_SQUARE[((pr + sr) // 2, (pc + sc) // 2)]
+            captured.append(mid_sq)
+        prev = step
+    return captured
+
+
+def checkers8free_move_probs(board, logits_list, probs_list):
+    result = []
+    for move in board.legal_moves():
+        origin, steps = move
+        mi = c8f_encode_move(origin, steps[-1])
+        # Captures are optional here, so a single position can mix jumps and
+        # quiet moves; pick the separator per-move from its own length.
+        sep = 'x' if len(steps) > 1 or checkers8free_captured(move) else '-'
+        pdn = sep.join(str(s) for s in [origin] + steps)
+        after = board.make_move(move)
+        result.append({
+            'origin': origin,
+            'dest': steps[-1],
+            'pdn': pdn,
+            'fen': c8f_board_to_fen(after),
+            'prob': round(probs_list[mi], 4),
+            'logit': sanitize_logits([logits_list[mi]])[0],
+        })
+    result.sort(key=lambda x: x['prob'], reverse=True)
+    return result
+
+
+@app.route('/checkers8free')
+def checkers8free_index():
+    return render_template('checkers8free.html')
+
+
+@app.route('/checkers8free/api/state', methods=['POST'])
+def checkers8free_state():
+    data = request.get_json()
+    fen = data['fen']
+    board = c8f_fen_to_board(fen)
+    return jsonify({
+        'squares': board.squares,
+        'currentPlayer': board.current_player,
+        'legalMoves': checkers8free_legal_json(board),
+        'isTerminal': board.is_terminal(),
+        'result': board.result() if board.is_terminal() else None,
+    })
+
+
+@app.route('/checkers8free/api/move', methods=['POST'])
+def checkers8free_move():
+    data = request.get_json()
+    fen = data['fen']
+    origin = data['origin']
+    dest = data['dest']
+
+    board = c8f_fen_to_board(fen)
+    target = None
+    for move in board.legal_moves():
+        o, steps = move
+        if o == origin and steps[-1] == dest:
+            target = move
+            break
+
+    if target is None:
+        return jsonify({'error': 'Invalid move'}), 400
+
+    after_user = board.make_move(target)
+    user_fen = c8f_board_to_fen(after_user)
+
+    if after_user.is_terminal():
+        return jsonify({
+            'userFen': user_fen,
+            'fen': user_fen,
+            'squares': after_user.squares,
+            'isTerminal': True,
+            'result': after_user.result(),
+            'modelResponse': None,
+            'legalMoves': [],
+        })
+
+    model_move, logits, probs, _ = checkers8free_infer(after_user)
+    move_probs = checkers8free_move_probs(after_user, logits, probs)
+    after_model = after_user.make_move(model_move)
+    model_fen = c8f_board_to_fen(after_model)
+
+    m_origin, m_steps = model_move
+
+    return jsonify({
+        'userFen': user_fen,
+        'userSquares': after_user.squares,
+        'fen': model_fen,
+        'squares': after_model.squares,
+        'isTerminal': after_model.is_terminal(),
+        'result': after_model.result() if after_model.is_terminal() else None,
+        'modelResponse': {
+            'origin': m_origin,
+            'dest': m_steps[-1],
+            'steps': m_steps,
+            'moveProbs': move_probs,
+        },
+        'legalMoves': checkers8free_legal_json(after_model),
+    })
+
+
+@app.route('/checkers8free/api/preview', methods=['POST'])
+def checkers8free_preview():
+    data = request.get_json()
+    fen = data['fen']
+    origin = data['origin']
+    dest = data['dest']
+
+    board = c8f_fen_to_board(fen)
+    target = None
+    for move in board.legal_moves():
+        o, steps = move
+        if o == origin and steps[-1] == dest:
+            target = move
+            break
+
+    if target is None:
+        return jsonify({'error': 'Invalid preview'}), 400
+
+    captured = checkers8free_captured(target)
+    after_user = board.make_move(target)
+    user_fen = c8f_board_to_fen(after_user)
+
+    if after_user.is_terminal():
+        return jsonify({
+            'userFen': user_fen,
+            'captured': captured,
+            'isTerminal': True,
+            'result': after_user.result(),
+            'modelResponse': None,
+        })
+
+    model_move, logits, probs, _ = checkers8free_infer(after_user)
+    move_probs = checkers8free_move_probs(after_user, logits, probs)
     m_origin, m_steps = model_move
 
     return jsonify({
