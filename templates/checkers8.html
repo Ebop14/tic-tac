@@ -483,6 +483,17 @@
 
   .btn:hover { background: var(--ink); color: var(--cream) }
   .btn:active { transform: scale(0.97) }
+  .btn:disabled { opacity: 0.3; cursor: not-allowed; pointer-events: none }
+
+  .controls {
+    display: flex;
+    gap: 0.8rem;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .btn-forfeit { border-color: var(--rust); color: var(--rust) }
+  .btn-forfeit:hover { background: var(--rust); color: var(--cream) }
 
   .score-bar {
     display: flex;
@@ -565,7 +576,10 @@
     <div class="status-text" id="status">Select a piece to move</div>
   </div>
 
-  <button class="btn" id="reset-btn">New Game</button>
+  <div class="controls">
+    <button class="btn btn-forfeit" id="forfeit-btn">Forfeit</button>
+    <button class="btn" id="reset-btn">New Game</button>
+  </div>
   <footer>8x8 &middot; 3-layer transformer &middot; 128d &middot; trained on depth-limited minimax</footer>
 </div>
 
@@ -620,6 +634,7 @@ const state = {
   legalMoves: [],
   gameOver: false,
   result: null,
+  forfeited: false,
   thinking: false,
   scores: { you: 0, draw: 0, ai: 0 },
   lastModelMove: null,
@@ -634,6 +649,7 @@ const statusEl = document.getElementById('status');
 const panelContent = document.getElementById('panel-content');
 const panelMode = document.getElementById('panel-mode');
 const resetBtn = document.getElementById('reset-btn');
+const forfeitBtn = document.getElementById('forfeit-btn');
 
 function destsForPiece(sq) {
   return state.legalMoves.filter(m => m.origin === sq).map(m => m.dest);
@@ -676,7 +692,7 @@ function buildPanelHtml(moveProbs, chosenMove, opts) {
   }
 
   if (terminal) {
-    const msg = terminalResult === -1
+    const msg = terminalResult === 1
       ? '<span class="rust">you win — no model response</span>'
       : terminalResult === 0
         ? 'draw — no model response'
@@ -835,10 +851,12 @@ function renderStatus() {
   if (state.thinking) {
     statusEl.innerHTML = 'Model thinking<span class="thinking"><span></span><span></span><span></span></span>';
   } else if (state.gameOver) {
-    if (state.result === 1) {
-      statusEl.innerHTML = '<span class="highlight"><span class="indigo">Model wins</span></span>';
-    } else if (state.result === -1) {
+    if (state.forfeited) {
+      statusEl.innerHTML = '<span class="highlight"><span class="rust">You forfeited</span> — <span class="indigo">model wins</span></span>';
+    } else if (state.result === 1) {
       statusEl.innerHTML = '<span class="highlight"><span class="rust">You win!</span></span>';
+    } else if (state.result === -1) {
+      statusEl.innerHTML = '<span class="highlight"><span class="indigo">Model wins</span></span>';
     } else {
       statusEl.innerHTML = '<span class="highlight">Draw</span>';
     }
@@ -860,6 +878,7 @@ function render() {
   renderStatus();
   showLastModelOutput();
   renderScores();
+  forfeitBtn.disabled = state.gameOver || state.thinking;
 }
 
 // --- Preview (hover) ---
@@ -1110,8 +1129,8 @@ async function makeMove(origin, dest) {
   if (data.isTerminal) {
     state.gameOver = true;
     state.result = data.result;
-    if (data.result === 1) state.scores.ai++;
-    else if (data.result === -1) state.scores.you++;
+    if (data.result === 1) state.scores.you++;
+    else if (data.result === -1) state.scores.ai++;
     else state.scores.draw++;
   }
 
@@ -1143,6 +1162,7 @@ function resetGame() {
   state.legalMoves = [];
   state.gameOver = false;
   state.result = null;
+  state.forfeited = false;
   state.thinking = false;
   state.lastModelMove = null;
   state.lastMoveProbs = null;
@@ -1151,7 +1171,20 @@ function resetGame() {
   fetchInitialState();
 }
 
+function forfeitGame() {
+  if (state.gameOver || state.thinking) return;
+  state.selected = null;
+  activePreview = null;
+  clearPreviewOverlay();
+  state.gameOver = true;
+  state.forfeited = true;
+  state.result = -1; // concede — model wins
+  state.scores.ai++;
+  render();
+}
+
 resetBtn.addEventListener('click', resetGame);
+forfeitBtn.addEventListener('click', forfeitGame);
 fetchInitialState();
 </script>
 </body>
