@@ -413,6 +413,35 @@
   .btn:hover { background: var(--ink); color: var(--cream) }
   .btn:active { transform: scale(0.97) }
 
+  .difficulty {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .difficulty .difficulty-label { color: var(--stone); margin-right: 0.2rem }
+
+  .difficulty button {
+    font-family: inherit;
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 0.3rem 0.7rem;
+    border: 1px solid rgba(26,26,24,0.2);
+    background: transparent;
+    color: var(--stone);
+    cursor: pointer;
+    border-radius: 3px;
+    transition: all 0.2s ease;
+  }
+
+  .difficulty button:hover { color: var(--ink); border-color: var(--ink) }
+  .difficulty button.active { background: var(--indigo); color: var(--cream); border-color: var(--indigo) }
+
   .score-bar {
     display: flex;
     gap: 2rem;
@@ -461,8 +490,6 @@
   <nav class="game-nav">
     <a href="/" class="active">tic-tac</a>
     <span class="sep">/</span>
-    <a href="/checkers">checkers 4x4</a>
-    <span class="sep">/</span>
     <a href="/checkers8">checkers 8x8</a>
     <span class="sep">/</span>
     <a href="/checkers8free">checkers 8x8 free</a>
@@ -494,6 +521,13 @@
     <div class="status-text" id="status">Your move — hover to preview</div>
   </div>
 
+  <div class="difficulty" id="difficulty">
+    <span class="difficulty-label">opponent</span>
+    <button type="button" data-diff="chill">chill</button>
+    <button type="button" data-diff="balanced" class="active">balanced</button>
+    <button type="button" data-diff="sharp">sharp</button>
+  </div>
+
   <button class="btn" id="reset-btn">New Game</button>
   <footer>2-layer transformer &middot; 64d &middot; trained on minimax</footer>
 </div>
@@ -520,6 +554,7 @@ const state = {
   lastProbs: null,
   lastMove: null,
   lastSquaresBefore: null,
+  difficulty: 'balanced',
 };
 
 let previewCache = {};
@@ -849,7 +884,7 @@ async function handleClick(idx) {
     const resp = await fetch('/api/move', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ squares: state.squares, currentPlayer: O_PIECE })
+      body: JSON.stringify({ squares: state.squares, currentPlayer: O_PIECE, difficulty: state.difficulty })
     });
     const data = await resp.json();
     await new Promise(r => setTimeout(r, 400));
@@ -899,6 +934,14 @@ function resetGame() {
   activePreview = null;
   render();
 }
+
+const difficultyEl = document.getElementById('difficulty');
+difficultyEl.querySelectorAll('button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    state.difficulty = btn.dataset.diff;
+    difficultyEl.querySelectorAll('button').forEach(b => b.classList.toggle('active', b === btn));
+  });
+});
 
 resetBtn.addEventListener('click', resetGame);
 render();

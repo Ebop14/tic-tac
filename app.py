@@ -63,9 +63,53 @@ def sanitize_logits(logits):
     return [None if math.isinf(v) else round(v, 3) for v in logits]
 
 
+# --- Move sampling (temperature + top-k) ---
+#
+# Difficulty presets map to (temperature, top_k). Higher temperature spreads
+# probability across moves (more human, more mistakes); top_k caps how many of
+# the best moves are even considered, so the model never plays an absurd blunder.
+# "sharp" with top_k=1 reproduces the old deterministic argmax (unbeatable).
+DIFFICULTY = {
+    'chill': (1.6, 5),
+    'balanced': (0.9, 3),
+    'sharp': (1.0, 1),
+}
+
+
+def resolve_sampling(data):
+    name = str(data.get('difficulty', 'balanced')).lower()
+    return DIFFICULTY.get(name, DIFFICULTY['balanced'])
+
+
+def sample_index(logits_row, temperature=1.0, top_k=1):
+    """Pick a move index from a logits row (illegal moves are -inf).
+
+    Falls back to argmax when there's nothing to randomize over. Legal logits
+    are first scaled to unit spread (divided by their std) so a given
+    temperature feels the same regardless of how peaked the model is for this
+    position or game — minimax-trained models otherwise produce enormous logit
+    gaps that swamp any reasonable temperature.
+    """
+    logits = logits_row.clone()
+    finite = torch.isfinite(logits)
+    n_legal = int(finite.sum().item())
+    if n_legal <= 1 or top_k <= 1 or temperature <= 0:
+        return int(torch.argmax(logits).item())
+    scale = logits[finite].std().item()
+    if scale < 1e-6:
+        return int(torch.argmax(logits).item())
+    logits = logits / scale
+    k = min(top_k, n_legal)
+    top_vals, top_idx = torch.topk(logits, k)
+    filtered = torch.full_like(logits, float('-inf'))
+    filtered[top_idx] = top_vals
+    probs = F.softmax(filtered / temperature, dim=0)
+    return int(torch.multinomial(probs, 1).item())
+
+
 # --- Tic-Tac-Toe ---
 
-def ttt_move_with_details(board):
+def ttt_move_with_details(board, temperature=1.0, top_k=1):
     fen = board_to_fen(board)
     token_ids = pad_sequence(encode_fen(fen))
     x = torch.tensor([token_ids], dtype=torch.long)
@@ -76,7 +120,7 @@ def ttt_move_with_details(board):
     with torch.no_grad():
         logits = ttt_model(x, legal_mask=mask)
     probs = F.softmax(logits, dim=1)
-    move = logits.argmax(dim=1).item()
+    move = sample_index(logits[0], temperature, top_k)
     return move, logits[0].tolist(), probs[0].tolist()
 
 
@@ -95,7 +139,8 @@ def get_move():
     if board.is_terminal():
         return jsonify({'error': 'Game is already over'}), 400
 
-    move, logits, probs = ttt_move_with_details(board)
+    temperature, top_k = resolve_sampling(data)
+    move, logits, probs = ttt_move_with_details(board, temperature, top_k)
     new_board = board.make_move(move)
 
     winner = new_board.check_winner()
@@ -154,7 +199,7 @@ def preview_move():
 
 # --- Checkers ---
 
-def checkers_infer(board):
+def checkers_infer(board, temperature=1.0, top_k=1):
     fen = c_board_to_fen(board)
     tokens = c_pad_sequence(c_encode_fen(fen))
     x = torch.tensor([tokens], dtype=torch.long)
@@ -169,7 +214,7 @@ def checkers_infer(board):
     with torch.no_grad():
         logits = checkers_model(x, legal_mask=mask)
     probs = F.softmax(logits, dim=1)
-    pred_idx = logits.argmax(dim=1).item()
+    pred_idx = sample_index(logits[0], temperature, top_k)
     return move_map[pred_idx], logits[0].tolist(), probs[0].tolist(), move_map
 
 
@@ -269,7 +314,8 @@ def checkers_move():
             'legalMoves': [],
         })
 
-    model_move, logits, probs, _ = checkers_infer(after_user)
+    temperature, top_k = resolve_sampling(data)
+    model_move, logits, probs, _ = checkers_infer(after_user, temperature, top_k)
     move_probs = checkers_move_probs(after_user, logits, probs)
     after_model = after_user.make_move(model_move)
     model_fen = c_board_to_fen(after_model)
@@ -342,7 +388,7 @@ def checkers_preview():
 
 # --- Checkers (8x8, full size) ---
 
-def checkers8_infer(board):
+def checkers8_infer(board, temperature=1.0, top_k=1):
     fen = c8_board_to_fen(board)
     tokens = c8_pad_sequence(c8_encode_fen(fen))
     x = torch.tensor([tokens], dtype=torch.long)
@@ -357,7 +403,7 @@ def checkers8_infer(board):
     with torch.no_grad():
         logits = checkers8_model(x, legal_mask=mask)
     probs = F.softmax(logits, dim=1)
-    pred_idx = logits.argmax(dim=1).item()
+    pred_idx = sample_index(logits[0], temperature, top_k)
     return move_map[pred_idx], logits[0].tolist(), probs[0].tolist(), move_map
 
 
@@ -457,7 +503,8 @@ def checkers8_move():
             'legalMoves': [],
         })
 
-    model_move, logits, probs, _ = checkers8_infer(after_user)
+    temperature, top_k = resolve_sampling(data)
+    model_move, logits, probs, _ = checkers8_infer(after_user, temperature, top_k)
     move_probs = checkers8_move_probs(after_user, logits, probs)
     after_model = after_user.make_move(model_move)
     model_fen = c8_board_to_fen(after_model)
@@ -530,7 +577,7 @@ def checkers8_preview():
 
 # --- Checkers (8x8, captures optional) ---
 
-def checkers8free_infer(board):
+def checkers8free_infer(board, temperature=1.0, top_k=1):
     fen = c8f_board_to_fen(board)
     tokens = c8f_pad_sequence(c8f_encode_fen(fen))
     x = torch.tensor([tokens], dtype=torch.long)
@@ -545,7 +592,7 @@ def checkers8free_infer(board):
     with torch.no_grad():
         logits = checkers8free_model(x, legal_mask=mask)
     probs = F.softmax(logits, dim=1)
-    pred_idx = logits.argmax(dim=1).item()
+    pred_idx = sample_index(logits[0], temperature, top_k)
     return move_map[pred_idx], logits[0].tolist(), probs[0].tolist(), move_map
 
 
@@ -646,7 +693,8 @@ def checkers8free_move():
             'legalMoves': [],
         })
 
-    model_move, logits, probs, _ = checkers8free_infer(after_user)
+    temperature, top_k = resolve_sampling(data)
+    model_move, logits, probs, _ = checkers8free_infer(after_user, temperature, top_k)
     move_probs = checkers8free_move_probs(after_user, logits, probs)
     after_model = after_user.make_move(model_move)
     model_fen = c8f_board_to_fen(after_model)
