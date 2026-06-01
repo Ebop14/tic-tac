@@ -108,3 +108,40 @@ def move_values(board, gamma=GAMMA):
     sign = 1 if board.current_player == X else -1
     return {m: sign * minimax_value(board.make_move(m), gamma)
             for m in board.legal_moves()}
+
+
+# --- Reward-shaped move values (for a human-feeling opponent) ---
+#
+# Taking an available win and blocking an immediate threat are the two things
+# any human always does, so we give them dominating payoffs: +1 for a move that
+# wins on the spot, -1 for a move that hands the opponent an immediate win.
+# Everything else (strategic, all-draws play) is compressed near 0 by
+# NEUTRAL_SCALE. Combined with a difficulty tolerance below the ~0.8 gap to the
+# extremes, randomization then varies only the neutral moves and never trades
+# away a win or a block.
+WIN_VAL = 1.0
+LOSE_VAL = -1.0
+NEUTRAL_SCALE = 0.2
+
+
+def _has_immediate_win(board):
+    """True if the side to move on `board` can win with a single move."""
+    for m in board.legal_moves():
+        if board.make_move(m).check_winner() == board.current_player:
+            return True
+    return False
+
+
+def shaped_move_values(board, gamma=GAMMA, neutral_scale=NEUTRAL_SCALE):
+    mover = board.current_player
+    sign = 1 if mover == X else -1
+    out = {}
+    for m in board.legal_moves():
+        after = board.make_move(m)
+        if after.check_winner() == mover:
+            out[m] = WIN_VAL                      # took an available win
+        elif _has_immediate_win(after):
+            out[m] = LOSE_VAL                     # left an open winning reply
+        else:
+            out[m] = neutral_scale * sign * minimax_value(after, gamma)
+    return out

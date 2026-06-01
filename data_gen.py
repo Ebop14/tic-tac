@@ -1,5 +1,5 @@
 import json
-from game import Board, move_values
+from game import Board, shaped_move_values
 from notation import board_to_fen
 
 NUM_MOVES = 9
@@ -23,7 +23,7 @@ def generate_all_positions():
             return
         seen.add(fen)
         values = [0.0] * NUM_MOVES
-        for move, val in move_values(board).items():
+        for move, val in shaped_move_values(board).items():
             values[move] = val
         dataset.append({'fen': fen, 'values': values})
         for move in board.legal_moves():
