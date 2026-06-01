@@ -651,7 +651,7 @@ def checkers8_preview():
 
 # --- Checkers (8x8, captures optional) ---
 
-def checkers8free_infer(board, temperature=1.0, top_k=1):
+def checkers8free_infer(board, tolerance=0.0):
     fen = c8f_board_to_fen(board)
     tokens = c8f_pad_sequence(c8f_encode_fen(fen))
     x = torch.tensor([tokens], dtype=torch.long)
@@ -664,10 +664,10 @@ def checkers8free_infer(board, temperature=1.0, top_k=1):
         move_map[mi] = move
     mask = torch.tensor([legal], dtype=torch.bool)
     with torch.no_grad():
-        logits = checkers8free_model(x, legal_mask=mask)
-    probs = F.softmax(logits, dim=1)
-    pred_idx = sample_index(logits[0], temperature, top_k)
-    return move_map[pred_idx], logits[0].tolist(), probs[0].tolist(), move_map
+        values = checkers8free_model(x, legal_mask=mask)
+    probs = F.softmax(values, dim=1)
+    pred_idx = select_by_value(values[0], tolerance)
+    return move_map[pred_idx], values[0].tolist(), probs[0].tolist(), move_map
 
 
 def checkers8free_legal_json(board):
@@ -767,8 +767,8 @@ def checkers8free_move():
             'legalMoves': [],
         })
 
-    temperature, top_k = resolve_sampling(data)
-    model_move, logits, probs, _ = checkers8free_infer(after_user, temperature, top_k)
+    tolerance = resolve_tolerance(data, VALUE_DIFFICULTY_C8)
+    model_move, logits, probs, _ = checkers8free_infer(after_user, tolerance)
     move_probs = checkers8free_move_probs(after_user, logits, probs)
     after_model = after_user.make_move(model_move)
     model_fen = c8f_board_to_fen(after_model)

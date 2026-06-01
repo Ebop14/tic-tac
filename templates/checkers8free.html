@@ -616,7 +616,7 @@
     <button class="btn btn-forfeit" id="forfeit-btn">Forfeit</button>
     <button class="btn" id="reset-btn">New Game</button>
   </div>
-  <footer>8x8 &middot; 3-layer transformer &middot; 128d &middot; trained on depth-limited minimax</footer>
+  <footer>8x8 &middot; 3-layer transformer &middot; 128d &middot; regresses depth-limited minimax values</footer>
 </div>
 
 <script>
@@ -718,7 +718,7 @@ function buildPanelHtml(moveProbs, chosenMove, opts) {
   html += '</div>';
 
   if (moveProbs.length > 0) {
-    html += '<div class="panel-section"><div class="raw-logits"><b>raw logits</b><br>';
+    html += '<div class="panel-section"><div class="raw-logits"><b>move values</b><br>';
     for (const m of moveProbs) {
       const isChosen = chosenMove && m.origin === chosenMove.origin && m.dest === chosenMove.dest;
       const cls = isChosen ? 'chosen-logit' : '';
