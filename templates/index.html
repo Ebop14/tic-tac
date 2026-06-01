@@ -324,6 +324,14 @@
 
   .panel-section { margin-top: 1rem }
 
+  .sampling-info {
+    font-size: 0.65rem;
+    color: var(--stone);
+    margin-bottom: 0.55rem;
+    letter-spacing: 0.02em;
+  }
+  .sampling-info b { color: var(--indigo); font-weight: 600 }
+
   .raw-logits {
     font-family: 'DM Mono', monospace;
     font-size: 0.55rem;
@@ -554,6 +562,7 @@ const state = {
   lastProbs: null,
   lastMove: null,
   lastSquaresBefore: null,
+  lastSampling: null,
   difficulty: 'balanced',
 };
 
@@ -588,7 +597,13 @@ function buildPanelHtml(probs, logits, chosen, legalMask, opts) {
   const legalProbs = probs.filter((_, i) => legalMask[i]);
   const maxProb = legalProbs.length ? Math.max(...legalProbs) : 1;
 
-  let html = '<div class="logit-grid">';
+  let html = '';
+  const s = opts.sampling;
+  if (s && s.temperature != null) {
+    html += `<div class="sampling-info">sampling · <b>temp ${s.temperature.toFixed(2)}</b>`
+          + ` · tol ${s.tolerance.toFixed(2)} — bars are true play odds</div>`;
+  }
+  html += '<div class="logit-grid">';
   for (let i = 0; i < 9; i++) {
     const isLegal = legalMask[i];
     const isChosen = i === chosen;
@@ -713,7 +728,7 @@ function zeroPanel() {
 function showLastModelOutput() {
   if (state.lastProbs) {
     const legalMask = state.lastSquaresBefore.map(s => s === EMPTY);
-    displayData(state.lastProbs, state.lastLogits, state.lastMove, legalMask, { isPreview: false });
+    displayData(state.lastProbs, state.lastLogits, state.lastMove, legalMask, { isPreview: false, sampling: state.lastSampling });
   } else {
     clearOverlays();
     zeroPanel();
@@ -836,7 +851,7 @@ async function handleHover(idx) {
       const legalMask = afterHuman.map(s => s === EMPTY);
       displayData(
         data.probs, data.logits, data.modelMove, legalMask,
-        { isPreview: true, previewMove: idx }
+        { isPreview: true, previewMove: idx, sampling: data }
       );
     }
   } catch (e) {
@@ -893,6 +908,7 @@ async function handleClick(idx) {
     state.lastProbs = data.probs;
     state.lastMove = data.move;
     state.lastSquaresBefore = squaresBefore;
+    state.lastSampling = { temperature: data.temperature, tolerance: data.tolerance };
 
     state.squares = data.squares;
     state.currentPlayer = data.currentPlayer;

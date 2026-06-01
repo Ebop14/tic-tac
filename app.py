@@ -97,16 +97,23 @@ def resolve_sampling(data):
 # still takes wins and blocks losses; chill just varies the neutral moves.
 # checkers8 values are tanh-squashed heuristic material (a ~1-man edge is ~0.3),
 # so its tolerances are smaller.
+#
+# Each preset is (tolerance, temperature). `tolerance` sets the pool width (how
+# far below the best a move may be and still be eligible); `temperature` then
+# sets how the move is drawn *within* that pool — instead of uniformly, we
+# softmax-weight by value so better moves are likelier. Lower temperature biases
+# harder toward the best move, higher flattens toward uniform. (sharp's pool is
+# just the top-valued ties, so its temperature barely matters.)
 VALUE_DIFFICULTY = {
-    'chill': 0.25,
-    'balanced': 0.1,
-    'sharp': 0.0,
+    'chill': (0.25, 1.5),
+    'balanced': (0.1, 0.6),
+    'sharp': (0.0, 0.5),
 }
 
 VALUE_DIFFICULTY_C8 = {
-    'chill': 0.5,
-    'balanced': 0.1,
-    'sharp': 0.0,
+    'chill': (0.5, 1.5),
+    'balanced': (0.1, 0.6),
+    'sharp': (0.0, 0.5),
 }
 
 # Tier gates for tic-tac-toe's shaped values (win=+1, loss=-1, neutral~0). The
@@ -116,30 +123,47 @@ TTT_WIN_FLOOR = 0.5
 TTT_LOSS_CEILING = -0.5
 
 
-def resolve_tolerance(data, table=VALUE_DIFFICULTY):
+def resolve_difficulty(data, table=VALUE_DIFFICULTY):
+    """Return (tolerance, temperature) for the requested difficulty."""
     name = str(data.get('difficulty', 'balanced')).lower()
     return table.get(name, table['balanced'])
 
 
-def select_by_value(values_row, tolerance, win_floor=None, loss_ceiling=None):
-    """Pick a move by value tolerance, with optional tier gates.
+def value_selection_probs(values_row, tolerance, temperature=1.0,
+                          win_floor=None, loss_ceiling=None):
+    """Per-move probability distribution the opponent actually draws from.
+
+    This is the single source of truth for both move selection and the UI bars,
+    so the on-screen percentages are the true odds of each move being played.
+    Length matches `values_row`; mass is 0 for illegal moves and for legal moves
+    outside the chosen pool.
 
     With `win_floor`/`loss_ceiling` set (tic-tac-toe's reward-shaped values),
-    the gates fire regardless of difficulty: if any move is predicted in the
-    win tier we only ever pick a winning move, and loss-tier moves are dropped
-    so a block is never skipped. The `tolerance` then varies only the remaining
+    the gates fire regardless of difficulty: if any move is predicted in the win
+    tier we only ever pick a winning move, and loss-tier moves are dropped so a
+    block is never skipped. The `tolerance` then varies only the remaining
     safe/neutral moves — so even chill always takes wins and blocks, but plays
     loosely otherwise. checkers8 passes no gates and gets pure tolerance.
+
+    Within the in-tolerance pool the move is drawn by `temperature`-softmax over
+    the values (not uniformly), so better moves are likelier; lower temperature
+    sharpens toward the best, higher flattens toward uniform. Values are first
+    scaled to unit spread so a given temperature behaves consistently regardless
+    of how tight the pool is.
     """
+    out = torch.zeros_like(values_row)
     legal_idx = torch.nonzero(torch.isfinite(values_row), as_tuple=False).flatten().tolist()
     if not legal_idx:
-        return int(torch.argmax(values_row).item())
+        return out
     vals = {i: values_row[i].item() for i in legal_idx}
     best = max(vals.values())
 
-    # Always take a confident win: collapse to the win tier.
+    # Always take a confident win: uniform over the win tier (all ~equal).
     if win_floor is not None and best >= win_floor:
-        return random.choice([i for i, v in vals.items() if v >= win_floor])
+        winners = [i for i, v in vals.items() if v >= win_floor]
+        for i in winners:
+            out[i] = 1.0 / len(winners)
+        return out
 
     # Always avoid a confident loss: drop the loss tier when a safer move exists.
     pool = vals
@@ -149,7 +173,38 @@ def select_by_value(values_row, tolerance, win_floor=None, loss_ceiling=None):
             pool = safe
     pbest = max(pool.values())
     candidates = [i for i, v in pool.items() if v >= pbest - tolerance]
-    return random.choice(candidates)
+
+    if len(candidates) == 1:
+        out[candidates[0]] = 1.0
+        return out
+    cand_vals = torch.tensor([pool[i] for i in candidates])
+    if temperature <= 0:  # deterministic best within the pool
+        out[candidates[int(torch.argmax(cand_vals).item())]] = 1.0
+        return out
+    scale = cand_vals.std().item()
+    if scale < 1e-6:  # all values equal — uniform over the pool
+        for i in candidates:
+            out[i] = 1.0 / len(candidates)
+        return out
+    p = F.softmax(cand_vals / scale / temperature, dim=0)
+    for j, i in enumerate(candidates):
+        out[i] = p[j]
+    return out
+
+
+def sample_from_probs(probs_row, values_row):
+    """Draw a move index from a selection distribution; argmax-value fallback."""
+    if float(probs_row.sum()) <= 0:
+        return int(torch.argmax(values_row).item())
+    return int(torch.multinomial(probs_row, 1).item())
+
+
+def select_by_value(values_row, tolerance, temperature=1.0,
+                    win_floor=None, loss_ceiling=None):
+    """Convenience: build the selection distribution and sample one move."""
+    probs = value_selection_probs(values_row, tolerance, temperature,
+                                  win_floor=win_floor, loss_ceiling=loss_ceiling)
+    return sample_from_probs(probs, values_row)
 
 
 def sample_index(logits_row, temperature=1.0, top_k=1):
@@ -180,7 +235,7 @@ def sample_index(logits_row, temperature=1.0, top_k=1):
 
 # --- Tic-Tac-Toe ---
 
-def ttt_move_with_details(board, tolerance=0.0):
+def ttt_move_with_details(board, tolerance=0.0, temperature=1.0):
     fen = board_to_fen(board)
     token_ids = pad_sequence(encode_fen(fen))
     x = torch.tensor([token_ids], dtype=torch.long)
@@ -190,12 +245,12 @@ def ttt_move_with_details(board, tolerance=0.0):
     mask = torch.tensor([legal], dtype=torch.bool)
     with torch.no_grad():
         values = ttt_model(x, legal_mask=mask)
-    # The panel shows softmax(values) as a quality distribution; selection uses
-    # the raw values directly via the difficulty tolerance.
-    probs = F.softmax(values, dim=1)
-    move = select_by_value(values[0], tolerance,
-                           win_floor=TTT_WIN_FLOOR, loss_ceiling=TTT_LOSS_CEILING)
-    return move, values[0].tolist(), probs[0].tolist()
+    # The panel bars show the actual selection distribution (what the opponent
+    # draws from), not a plain softmax of values — so percentages are true odds.
+    probs = value_selection_probs(values[0], tolerance, temperature,
+                                  win_floor=TTT_WIN_FLOOR, loss_ceiling=TTT_LOSS_CEILING)
+    move = sample_from_probs(probs, values[0])
+    return move, values[0].tolist(), probs.tolist()
 
 
 @app.route('/')
@@ -213,8 +268,8 @@ def get_move():
     if board.is_terminal():
         return jsonify({'error': 'Game is already over'}), 400
 
-    tolerance = resolve_tolerance(data)
-    move, logits, probs = ttt_move_with_details(board, tolerance)
+    tolerance, temperature = resolve_difficulty(data)
+    move, logits, probs = ttt_move_with_details(board, tolerance, temperature)
     new_board = board.make_move(move)
 
     winner = new_board.check_winner()
@@ -232,6 +287,8 @@ def get_move():
         'winner': winner_label,
         'logits': sanitize_logits(logits),
         'probs': [round(v, 4) for v in probs],
+        'temperature': temperature,
+        'tolerance': tolerance,
     })
 
 
@@ -260,7 +317,8 @@ def preview_move():
             'modelMove': None,
         })
 
-    model_move, logits, probs = ttt_move_with_details(after_human)
+    tolerance, temperature = resolve_difficulty(data)
+    model_move, logits, probs = ttt_move_with_details(after_human, tolerance, temperature)
     return jsonify({
         'previewMove': preview_move_idx,
         'isTerminal': False,
@@ -268,6 +326,8 @@ def preview_move():
         'logits': sanitize_logits(logits),
         'probs': [round(v, 4) for v in probs],
         'modelMove': model_move,
+        'temperature': temperature,
+        'tolerance': tolerance,
     })
 
 
@@ -462,7 +522,7 @@ def checkers_preview():
 
 # --- Checkers (8x8, full size) ---
 
-def checkers8_infer(board, tolerance=0.0):
+def checkers8_infer(board, tolerance=0.0, temperature=1.0):
     fen = c8_board_to_fen(board)
     tokens = c8_pad_sequence(c8_encode_fen(fen))
     x = torch.tensor([tokens], dtype=torch.long)
@@ -476,9 +536,10 @@ def checkers8_infer(board, tolerance=0.0):
     mask = torch.tensor([legal], dtype=torch.bool)
     with torch.no_grad():
         values = checkers8_model(x, legal_mask=mask)
-    probs = F.softmax(values, dim=1)
-    pred_idx = select_by_value(values[0], tolerance)
-    return move_map[pred_idx], values[0].tolist(), probs[0].tolist(), move_map
+    # Bars show the true selection distribution (see value_selection_probs).
+    probs = value_selection_probs(values[0], tolerance, temperature)
+    pred_idx = sample_from_probs(probs, values[0])
+    return move_map[pred_idx], values[0].tolist(), probs.tolist(), move_map
 
 
 def checkers8_legal_json(board):
@@ -577,8 +638,8 @@ def checkers8_move():
             'legalMoves': [],
         })
 
-    tolerance = resolve_tolerance(data, VALUE_DIFFICULTY_C8)
-    model_move, logits, probs, _ = checkers8_infer(after_user, tolerance)
+    tolerance, temperature = resolve_difficulty(data, VALUE_DIFFICULTY_C8)
+    model_move, logits, probs, _ = checkers8_infer(after_user, tolerance, temperature)
     move_probs = checkers8_move_probs(after_user, logits, probs)
     after_model = after_user.make_move(model_move)
     model_fen = c8_board_to_fen(after_model)
@@ -597,6 +658,8 @@ def checkers8_move():
             'dest': m_steps[-1],
             'steps': m_steps,
             'moveProbs': move_probs,
+            'temperature': temperature,
+            'tolerance': tolerance,
         },
         'legalMoves': checkers8_legal_json(after_model),
     })
@@ -633,7 +696,8 @@ def checkers8_preview():
             'modelResponse': None,
         })
 
-    model_move, logits, probs, _ = checkers8_infer(after_user)
+    tolerance, temperature = resolve_difficulty(data, VALUE_DIFFICULTY_C8)
+    model_move, logits, probs, _ = checkers8_infer(after_user, tolerance, temperature)
     move_probs = checkers8_move_probs(after_user, logits, probs)
     m_origin, m_steps = model_move
 
@@ -645,13 +709,15 @@ def checkers8_preview():
             'origin': m_origin,
             'dest': m_steps[-1],
             'moveProbs': move_probs,
+            'temperature': temperature,
+            'tolerance': tolerance,
         },
     })
 
 
 # --- Checkers (8x8, captures optional) ---
 
-def checkers8free_infer(board, tolerance=0.0):
+def checkers8free_infer(board, tolerance=0.0, temperature=1.0):
     fen = c8f_board_to_fen(board)
     tokens = c8f_pad_sequence(c8f_encode_fen(fen))
     x = torch.tensor([tokens], dtype=torch.long)
@@ -665,9 +731,10 @@ def checkers8free_infer(board, tolerance=0.0):
     mask = torch.tensor([legal], dtype=torch.bool)
     with torch.no_grad():
         values = checkers8free_model(x, legal_mask=mask)
-    probs = F.softmax(values, dim=1)
-    pred_idx = select_by_value(values[0], tolerance)
-    return move_map[pred_idx], values[0].tolist(), probs[0].tolist(), move_map
+    # Bars show the true selection distribution (see value_selection_probs).
+    probs = value_selection_probs(values[0], tolerance, temperature)
+    pred_idx = sample_from_probs(probs, values[0])
+    return move_map[pred_idx], values[0].tolist(), probs.tolist(), move_map
 
 
 def checkers8free_legal_json(board):
@@ -767,8 +834,8 @@ def checkers8free_move():
             'legalMoves': [],
         })
 
-    tolerance = resolve_tolerance(data, VALUE_DIFFICULTY_C8)
-    model_move, logits, probs, _ = checkers8free_infer(after_user, tolerance)
+    tolerance, temperature = resolve_difficulty(data, VALUE_DIFFICULTY_C8)
+    model_move, logits, probs, _ = checkers8free_infer(after_user, tolerance, temperature)
     move_probs = checkers8free_move_probs(after_user, logits, probs)
     after_model = after_user.make_move(model_move)
     model_fen = c8f_board_to_fen(after_model)
@@ -787,6 +854,8 @@ def checkers8free_move():
             'dest': m_steps[-1],
             'steps': m_steps,
             'moveProbs': move_probs,
+            'temperature': temperature,
+            'tolerance': tolerance,
         },
         'legalMoves': checkers8free_legal_json(after_model),
     })
@@ -823,7 +892,8 @@ def checkers8free_preview():
             'modelResponse': None,
         })
 
-    model_move, logits, probs, _ = checkers8free_infer(after_user)
+    tolerance, temperature = resolve_difficulty(data, VALUE_DIFFICULTY_C8)
+    model_move, logits, probs, _ = checkers8free_infer(after_user, tolerance, temperature)
     move_probs = checkers8free_move_probs(after_user, logits, probs)
     m_origin, m_steps = model_move
 
@@ -835,6 +905,8 @@ def checkers8free_preview():
             'origin': m_origin,
             'dest': m_steps[-1],
             'moveProbs': move_probs,
+            'temperature': temperature,
+            'tolerance': tolerance,
         },
     })
 

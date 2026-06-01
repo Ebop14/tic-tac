@@ -382,6 +382,14 @@
 
   .move-item.chosen .prob-val { color: var(--indigo); font-weight: 500 }
 
+  .sampling-info {
+    font-size: 0.65rem;
+    color: var(--stone);
+    margin-bottom: 0.55rem;
+    letter-spacing: 0.02em;
+  }
+  .sampling-info b { color: var(--indigo); font-weight: 600 }
+
   .move-fen {
     font-family: 'DM Mono', monospace;
     font-size: 0.5rem;
@@ -675,6 +683,7 @@ const state = {
   scores: { you: 0, draw: 0, ai: 0 },
   lastModelMove: null,
   lastMoveProbs: null,
+  lastSampling: null,
   difficulty: 'balanced',
 };
 
@@ -698,7 +707,13 @@ function buildPanelHtml(moveProbs, chosenMove, opts) {
   const terminalResult = opts.terminalResult;
   const maxProb = moveProbs.length ? Math.max(...moveProbs.map(m => m.prob)) : 1;
 
-  let html = '<div class="move-list">';
+  let html = '';
+  const s = opts.sampling;
+  if (s && s.temperature != null) {
+    html += `<div class="sampling-info">sampling · <b>temp ${s.temperature.toFixed(2)}</b>`
+          + ` · tol ${s.tolerance.toFixed(2)} — bars are true play odds</div>`;
+  }
+  html += '<div class="move-list">';
   for (const m of moveProbs) {
     const isChosen = chosenMove && m.origin === chosenMove.origin && m.dest === chosenMove.dest;
     const cls = isChosen ? 'chosen' : '';
@@ -806,7 +821,7 @@ function clearBoardOverlays() {
 
 function showLastModelOutput() {
   if (state.lastMoveProbs) {
-    showPanel(state.lastMoveProbs, state.lastModelMove, { isPreview: false });
+    showPanel(state.lastMoveProbs, state.lastModelMove, { isPreview: false, sampling: state.lastSampling });
     applyBoardOverlays(state.lastMoveProbs, state.lastModelMove, { isPreview: false });
   } else {
     panelContent.innerHTML = '<div class="panel-empty">waiting for move...</div>';
@@ -973,7 +988,7 @@ async function handleDestHover(destSq) {
       clearBoardOverlays();
     } else if (data.modelResponse) {
       const chosen = { origin: data.modelResponse.origin, dest: data.modelResponse.dest };
-      showPanel(data.modelResponse.moveProbs, chosen, { isPreview: true });
+      showPanel(data.modelResponse.moveProbs, chosen, { isPreview: true, sampling: data.modelResponse });
       clearBoardOverlays();
       applyBoardOverlays(data.modelResponse.moveProbs, chosen, { isPreview: true });
     }
@@ -1156,6 +1171,7 @@ async function makeMove(origin, dest) {
     await animateSlide(mr.origin, mr.steps, modelPiece);
     state.lastModelMove = { origin: mr.origin, dest: mr.dest };
     state.lastMoveProbs = mr.moveProbs;
+    state.lastSampling = { temperature: mr.temperature, tolerance: mr.tolerance };
   }
 
   state.fen = data.fen;
