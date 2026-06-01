@@ -22,7 +22,11 @@ class CheckersTransformer(nn.Module):
         h = self.transformer(h, src_key_padding_mask=pad_mask)
         mask = (~pad_mask).unsqueeze(-1).float()
         h = (h * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
-        logits = self.head(h)
+        # Per-move value head: tanh bounds outputs to [-1, 1], matching the
+        # depth-limited minimax values (squashed by VALUE_SCALE in data_gen).
+        # Train without legal_mask (loss is masked); at inference pass
+        # legal_mask so illegal moves drop out of argmax / softmax.
+        values = torch.tanh(self.head(h))
         if legal_mask is not None:
-            logits = logits.masked_fill(~legal_mask, float('-inf'))
-        return logits
+            values = values.masked_fill(~legal_mask, float('-inf'))
+        return values

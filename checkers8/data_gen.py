@@ -1,62 +1,108 @@
 import json
+import math
+import os
 import random
 import sys
 import time
 
-from checkers8.game import Board
-from checkers8.notation import board_to_fen
+from checkers8.game import Board, search, BLACK
+from checkers8.notation import board_to_fen, fen_to_board
 from checkers8.codebook import encode_move
-from checkers8.game import search
 
+# Heuristic search values are unbounded material scores (a man is ~100, a king
+# ~175, terminal wins ~+/-WIN). tanh(value / VALUE_SCALE) squashes them into the
+# model's [-1, 1] value head: ~1 man -> 0.32, 2 men -> 0.58, 3 men -> 0.76, and
+# terminal wins saturate to +/-1. Difficulty tolerances downstream are in these
+# squashed units.
+VALUE_SCALE = 300.0
+
+
+def squash(v):
+    return math.tanh(v / VALUE_SCALE)
+
+
+def position_values(board, depth):
+    """Per-move squashed values from the perspective of the player to move.
+
+    For each legal move we look one ply past it (search at depth-1), which is
+    exactly the value the depth-`depth` teacher would back up for that move.
+    Sign-flipped for WHITE so higher is always better for whoever is on move.
+    """
+    sign = 1 if board.current_player == BLACK else -1
+    out = []
+    for move in board.legal_moves():
+        origin, steps = move
+        v, _ = search(board.make_move(move), depth - 1)
+        out.append([encode_move(origin, steps[-1]), squash(sign * v)])
+    return out
+
+
+# --- position sourcing via self-play (the same teacher as before) ---
 
 def play_game(depth, epsilon, max_moves, rng):
-    """Self-play one game. At each position record the depth-limited best move
-    as the training label, but actually play an epsilon-greedy move so the
-    sampled positions stay diverse."""
     board = Board()
-    samples = []
+    fens = []
     for _ in range(max_moves):
         if board.is_terminal():
             break
-        val, best = search(board, depth)
+        _, best = search(board, depth)
         if best is None:
             break
-        origin, steps = best
-        final = steps[-1]
-        samples.append({
-            'fen': board_to_fen(board),
-            'move_idx': encode_move(origin, final),
-            'origin': origin,
-            'dest': final,
-            'val': val,
-        })
+        fens.append(board_to_fen(board))
         legal = board.legal_moves()
         if rng.random() < epsilon and len(legal) > 1:
             move = rng.choice(legal)
         else:
             move = best
         board = board.make_move(move)
-    return samples
+    return fens
 
 
-def generate_dataset(num_games=300, depth=5, epsilon=0.25, max_moves=90, seed=0):
+def collect_fens(num_games, depth, epsilon, max_moves, seed):
     rng = random.Random(seed)
-    by_fen = {}
-    start = time.time()
+    seen = set()
     for g in range(num_games):
-        for sample in play_game(depth, epsilon, max_moves, rng):
-            by_fen.setdefault(sample['fen'], sample)
+        for fen in play_game(depth, epsilon, max_moves, rng):
+            seen.add(fen)
         if (g + 1) % 10 == 0:
+            print(f'  game {g + 1}/{num_games} | {len(seen)} unique positions', flush=True)
+    return list(seen)
+
+
+def build_value_dataset(fens, depth):
+    dataset = []
+    start = time.time()
+    for i, fen in enumerate(fens):
+        board = fen_to_board(fen)
+        if board.is_terminal():
+            continue
+        values = position_values(board, depth)
+        if not values:
+            continue
+        dataset.append({'fen': fen, 'values': values})
+        if (i + 1) % 2000 == 0:
             elapsed = time.time() - start
-            print(f'  game {g + 1}/{num_games} | {len(by_fen)} unique positions '
-                  f'| {elapsed:.0f}s', flush=True)
-    return list(by_fen.values())
+            print(f'  valued {i + 1}/{len(fens)} positions | {elapsed:.0f}s', flush=True)
+    return dataset
 
 
 if __name__ == '__main__':
-    games = int(sys.argv[1]) if len(sys.argv) > 1 else 300
-    depth = int(sys.argv[2]) if len(sys.argv) > 2 else 5
-    data = generate_dataset(num_games=games, depth=depth)
+    depth = int(sys.argv[1]) if len(sys.argv) > 1 else 5
+    existing = 'checkers8/data.json'
+    # Reuse the teacher's already-sampled positions when present (deterministic,
+    # same distribution as the original classifier dataset); otherwise self-play.
+    fens = None
+    if os.path.exists(existing):
+        with open(existing) as f:
+            prev = json.load(f)
+        if prev and 'fen' in prev[0]:
+            fens = [item['fen'] for item in prev]
+            print(f'Reusing {len(fens)} positions from {existing}')
+    if fens is None:
+        print('No existing positions found; generating via self-play')
+        fens = collect_fens(num_games=300, depth=depth, epsilon=0.25, max_moves=90, seed=0)
+
+    data = build_value_dataset(fens, depth)
     with open('checkers8/data.json', 'w') as f:
         json.dump(data, f)
-    print(f'Generated {len(data)} training examples (games={games}, depth={depth})')
+    print(f'Generated {len(data)} value-labeled examples (depth={depth}, scale={VALUE_SCALE})')

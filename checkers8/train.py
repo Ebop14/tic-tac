@@ -3,29 +3,28 @@ import os
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
-from checkers8.codebook import encode_fen, pad_sequence, encode_move, NUM_MOVES
-from checkers8.notation import fen_to_board
+from checkers8.codebook import encode_fen, pad_sequence, NUM_MOVES
 from checkers8.model import CheckersTransformer
 
 
 class CheckersDataset(Dataset):
     def __init__(self, data):
-        # The token ids and legal-move masks are deterministic per position, so
-        # precompute them once instead of regenerating legal moves for every
-        # item on every epoch (that Python work dominated each epoch's runtime).
+        # Precompute tokens, dense value targets and legal masks once. The value
+        # list enumerates exactly the legal moves, so the mask comes straight
+        # from it — no need to regenerate legal moves from the board.
         self.tokens = []
         self.targets = []
         self.legal = []
         for i, item in enumerate(data):
             fen = item['fen']
             self.tokens.append(torch.tensor(pad_sequence(encode_fen(fen)), dtype=torch.long))
-            self.targets.append(torch.tensor(item['move_idx'], dtype=torch.long))
 
-            board = fen_to_board(fen)
+            target = torch.zeros(NUM_MOVES, dtype=torch.float)
             legal = torch.zeros(NUM_MOVES, dtype=torch.bool)
-            for move in board.legal_moves():
-                origin, steps = move
-                legal[encode_move(origin, steps[-1])] = True
+            for move_idx, val in item['values']:
+                target[move_idx] = val
+                legal[move_idx] = True
+            self.targets.append(target)
             self.legal.append(legal)
 
             if (i + 1) % 2000 == 0:
@@ -38,13 +37,31 @@ class CheckersDataset(Dataset):
         return self.tokens[idx], self.targets[idx], self.legal[idx]
 
 
+def masked_mse(pred, target, legal):
+    m = legal.float()
+    sq = (pred - target) ** 2 * m
+    return sq.sum() / m.sum().clamp(min=1)
+
+
+def policy_agreement(pred, target, legal):
+    """Fraction of positions where the highest-value predicted legal move is an
+    optimal move (ties on the true value count as agreement)."""
+    neg = torch.finfo(pred.dtype).min
+    masked_pred = torch.where(legal, pred, torch.full_like(pred, neg))
+    chosen = masked_pred.argmax(dim=1)
+    masked_target = torch.where(legal, target, torch.full_like(target, neg))
+    best_target = masked_target.max(dim=1).values
+    chosen_target = target.gather(1, chosen.unsqueeze(1)).squeeze(1)
+    return (torch.isclose(chosen_target, best_target, atol=1e-3)).float().mean().item()
+
+
 def save_cpu_state(model, path):
     # Always persist CPU tensors so the Flask app loads cleanly on a CPU-only
-    # machine even when the weights were trained on a GPU (e.g. Colab).
+    # machine even when the weights were trained on a GPU (e.g. Colab / MPS).
     torch.save({k: v.detach().cpu() for k, v in model.state_dict().items()}, path)
 
 
-def train(epochs=200, lr=1e-3, batch_size=512, data_path='checkers8/data.json',
+def train(epochs=300, lr=1e-3, batch_size=512, data_path='checkers8/data.json',
           out_path='checkers8/model.pt', device=None, resume=False):
     if device is None:
         if torch.cuda.is_available():
@@ -61,8 +78,6 @@ def train(epochs=200, lr=1e-3, batch_size=512, data_path='checkers8/data.json',
     print(f'Training on {len(data)} positions')
     dataset = CheckersDataset(data)
     pin = device == 'cuda'
-    # __getitem__ is now a trivial tensor lookup, so worker processes add only
-    # fork overhead; keep it single-process.
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True,
                         num_workers=0, pin_memory=pin)
 
@@ -71,40 +86,39 @@ def train(epochs=200, lr=1e-3, batch_size=512, data_path='checkers8/data.json',
         model.load_state_dict(torch.load(out_path, map_location=device))
         print(f'Warm-started from {out_path}')
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.CrossEntropyLoss()
 
-    best_acc = 0
+    best_agree = 0
     for epoch in range(1, epochs + 1):
         total_loss = 0
-        correct = 0
+        agree_sum = 0
         total = 0
         model.train()
-        for x, y, mask in loader:
-            x, y, mask = x.to(device), y.to(device), mask.to(device)
-            logits = model(x, legal_mask=mask)
-            loss = criterion(logits, y)
+        for x, y, legal in loader:
+            x, y, legal = x.to(device), y.to(device), legal.to(device)
+            pred = model(x)  # raw values, no masking — loss is masked instead
+            loss = masked_mse(pred, y, legal)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            total_loss += loss.item() * x.size(0)
-            preds = logits.argmax(dim=1)
-            correct += (preds == y).sum().item()
-            total += x.size(0)
+            bs = x.size(0)
+            total_loss += loss.item() * bs
+            agree_sum += policy_agreement(pred.detach(), y, legal) * bs
+            total += bs
 
-        acc = correct / total
+        agree = agree_sum / total
         avg_loss = total_loss / total
-        improved = acc > best_acc
+        improved = agree > best_agree
         if improved:
-            best_acc = acc
+            best_agree = agree
             save_cpu_state(model, out_path)
 
-        print(f'Epoch {epoch:3d}/{epochs} | Loss: {avg_loss:.4f} | '
-              f'Accuracy: {acc:.4f} | Best: {best_acc:.4f}'
+        print(f'Epoch {epoch:3d}/{epochs} | MSE: {avg_loss:.5f} | '
+              f'Policy agreement: {agree:.4f} | Best: {best_agree:.4f}'
               f"{'  *saved' if improved else ''}", flush=True)
 
     save_cpu_state(model, out_path)
-    print(f'Model saved to {out_path}. Best accuracy: {best_acc:.4f}')
+    print(f'Model saved to {out_path}. Best policy agreement: {best_agree:.4f}')
     return model
 
 
